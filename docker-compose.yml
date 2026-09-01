@@ -1,0 +1,19 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_insurance
+    ports:
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC API
+    volumes:
+      - ./data/qdrant_storage:/drant/storage
+    restart: unless-stopped
+  
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama_insurance
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./data/ollama_storage:/root/.ollama
+  #   restart: unless-stopped
