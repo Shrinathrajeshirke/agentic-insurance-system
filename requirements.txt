@@ -1,0 +1,21 @@
+# --- Core Framework & Environment ---
+pydantic
+pydantic-settings
+python-dotenv
+
+# --- LLM & Agentic Orchestration ---
+langchain
+langchain-core 
+langchain-community
+langchain-groq
+langgraph
+
+# --- Embeddings & Vector Database ---
+sentence-transformers
+qdrant-client
+
+# --- API & Web Interface ---
+fastapi
+uvicorn
+streamlit
+requests
