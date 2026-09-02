@@ -1,0 +1,32 @@
+[
+    {
+        "policy_name": "Click 2 Protect Super",
+        "insurer": "HDFC Life",
+        "clause_type": "eligibility",
+        "entry_age_min": 18, 
+        "entry_age_max": 65,
+        "smoker_allowed": true,
+        "riders_available": ["Accidental Death", "Critical Illness"],
+        "content": "Eligibility Criteria: The minimum entry age for HDFC Life Click 2 Protect Super is 18 years, and the maximum entry age is 65 years. The maximum maturity age is 85 years for regular term coverage and 99 years for the whole life option. Premium rates differ strictly based on the applicant's declared tobacco or nicotine usage. Non-smokers are eligible for a discounted premium bracket."
+    },
+    {
+        "policy_name": "Click 2 Protect Super",
+        "insurer": "HDFC Life",
+        "clause_type": "exclusion",
+        "entry_age_min": 18,
+        "entry_age_max": 65,
+        "smoker_allowed": true,
+        "riders_available": ["Accidental Death", "Critical Illness"],
+        "content": "Suicide Exclusion Clause: If the life assured commits suicide, whether sane or insane, within 12 months from the date of commencement of risk or the date of revival of the policy, the policy shall be void. In such cases, the insurer will pay only 80% of the total premiums paid till the date of death, provided the policy is in force."
+    },
+    {
+        "policy_name": "Smart Secure Plus",
+        "insurer": "Max Life",
+        "clause_type": "rider",
+        "entry_age_min": 18,
+        "entry_age_max": 60,
+        "smoker_allowed": true,
+        "riders_available": ["Critical Illness", "Waiver of Premium"],
+        "content": "Critical Illness Rider Benefit: The Max Life Smart Secure Plus plan offers an accelerated Critical Illness benefit covering 40 specified severe illnesses. If the insured is diagnosed with any of these covered illnesses, the chosen rider sum assured is paid immediately as a lump sum, and the base policy sum assured is reduced by an equivalent amount. A waiting period of 90 days applies from the policy commencement date."
+    }
+]

@@ -29,3 +29,7 @@ To ensure production readiness, custom logging and exception handling modules ha
   * `state.py`: LangGraph `AgentState` definition tracking messages, profile extraction state, and retrieved context.
 * **Model & Embedding Adapters (`src/agents/llm.py`)**: Centralized initialization for Groq LLM (`llama-3.3-70b-versatile`) and CPU-optimized embeddings (`sentence-transformers/all-MiniLM-L6-v2`).
 * **Self-Test Script (`test_setup.py`)**: End-to-end verification script testing configurations, schema validation, Qdrant connectivity, embedding vector generation, and Groq API calls.
+
+## Phase 2: Data Ingestion Pipeline
+* **Base Dataset (`data/raw_policies/sample_policies.json`)**: Created a structured JSON repository of verified insurance clauses (Eligibility, Exclusions, Riders) for HDFC Life and Max Life.
+* **Vector Indexer (`src/ingestion/indexer.py`)**: Implemented an ingestion pipeline using `qdrant_client`. It reads structured policy definitions, generates fixed-length dense vectors via the HuggingFace `all-MiniLM-L6-v2` embedding model, dynamically initializes the Qdrant collection if missing, and performs a batch upsert with extensive metadata payloads (age limits, smoker flags, insurer names) for strict hybrid filtering during retrieval.
