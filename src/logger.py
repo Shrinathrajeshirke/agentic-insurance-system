@@ -34,3 +34,6 @@ logger = logging.getLogger("AgenticRAG_Logger")
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 logger.addHandler(console_handler)
+
+# Suppress noisy HTTP request logs from huggingface and httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)

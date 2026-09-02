@@ -33,3 +33,8 @@ To ensure production readiness, custom logging and exception handling modules ha
 ## Phase 2: Data Ingestion Pipeline
 * **Base Dataset (`data/raw_policies/sample_policies.json`)**: Created a structured JSON repository of verified insurance clauses (Eligibility, Exclusions, Riders) for HDFC Life and Max Life.
 * **Vector Indexer (`src/ingestion/indexer.py`)**: Implemented an ingestion pipeline using `qdrant_client`. It reads structured policy definitions, generates fixed-length dense vectors via the HuggingFace `all-MiniLM-L6-v2` embedding model, dynamically initializes the Qdrant collection if missing, and performs a batch upsert with extensive metadata payloads (age limits, smoker flags, insurer names) for strict hybrid filtering during retrieval.
+
+## Phase 3: Agentic Tools & Fallback Mechanism
+* **Policy Vector Search (`search_policy_contracts`)**: LangChain tool querying the Qdrant vector index with metadata filters (`clause_type`) and cosine score extraction.
+* **Fallback Web Retrieval (`web_search`)**: DuckDuckGo integration to handle out-of-distribution queries, market statistics, or unindexed policies.
+* **Active Runtime Ingestion (`ingest_policy_document`)**: Dynamic parser that splits uploaded PDF contracts using `RecursiveCharacterTextSplitter` and embeds them into Qdrant on the fly.
