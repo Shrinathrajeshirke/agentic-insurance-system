@@ -6,8 +6,8 @@ class Settings(BaseSettings):
     MODEL_PROVIDER: str = "groq"
 
     # Groq Cloud Settings
-    GROQ_API_KEY: str = ""
-    GROQ_MODEL_NAME: str = "llama-3.3-70b-versatile"
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL_NAME: str = "gpt-4o-mini"
 
     # Embedding Settings
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"

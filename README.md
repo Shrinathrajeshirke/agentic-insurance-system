@@ -38,3 +38,9 @@ To ensure production readiness, custom logging and exception handling modules ha
 * **Policy Vector Search (`search_policy_contracts`)**: LangChain tool querying the Qdrant vector index with metadata filters (`clause_type`) and cosine score extraction.
 * **Fallback Web Retrieval (`web_search`)**: DuckDuckGo integration to handle out-of-distribution queries, market statistics, or unindexed policies.
 * **Active Runtime Ingestion (`ingest_policy_document`)**: Dynamic parser that splits uploaded PDF contracts using `RecursiveCharacterTextSplitter` and embeds them into Qdrant on the fly.
+
+## Phase 4: Stateful Agent Orchestration (LangGraph)
+* **`src/agents/graph.py`**: Built an end-to-end `StateGraph` agent workflow:
+  * `profiler_node`: Extracts structured applicant metadata (`UserProfile`) across conversational turns.
+  * `retriever_node`: Performs similarity evaluation against Qdrant, falling back to DuckDuckGo search when relevance falls below threshold.
+  * `advisor_node`: Synthesizes the extracted profile with retrieved contractual clauses to provide grounded recommendations with citations.
