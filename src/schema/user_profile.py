@@ -1,14 +1,18 @@
-## Defines the customer's underwriting profile.
-
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import List, Optional, Union
 
 class UserProfile(BaseModel):
-    age: Optional[int] = Field(None, description="Age in years")
-    gender: Optional[str] = Field(None, description="Male, Female, or Other")
-    annual_income: Optional[float] = Field(None, description="Annual income in local currency")
-    is_smoker: Optional[bool] = Field(None, description="True if tobacco/nicotine user, False otherwise")
-    medical_conditions: List[str] = Field(default_factory=list, description="List of pre-existing conditions")
-    dependents_count: Optional[int] = Field(None, description="Number of financial dependents")
-    desired_sum_assured: Optional[float] = Field(None, description="Target cooverage amount")
-    policy_term_years: Optional[int] = Field(None, description="Desired coverage duration in years")
+    age: Optional[int] = Field(default=None, description="Age in years")
+    gender: Optional[str] = Field(default=None, description="Gender")
+    annual_income: Optional[Union[str, float]] = Field(
+        default=None, 
+        description="Annual income tier or exact value in INR"
+    )
+    is_smoker: Optional[bool] = Field(default=None, description="Tobacco/smoking status")
+    medical_conditions: List[str] = Field(default_factory=list, description="Declared health conditions")
+    dependents_count: Optional[int] = Field(default=None, description="Count of dependents")
+    desired_sum_assured: Optional[Union[str, float]] = Field(
+        default=None, 
+        description="Desired life cover tier (e.g., '1 Crore', '2 Crore')"
+    )
+    policy_term_years: Optional[int] = Field(default=None, description="Coverage duration in years")

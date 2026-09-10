@@ -75,6 +75,14 @@ docs/_build/
 .pybuilder/
 target/
 
+# SQLite Databases & Checkpointers
+conversations.db
+*.db
+*.db-shm 
+*.db-wal
+*.sqlite
+*.sqlite3
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

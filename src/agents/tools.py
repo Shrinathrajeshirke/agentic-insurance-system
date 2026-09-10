@@ -18,7 +18,10 @@ def search_policy_contracts(query: str, clause_type: Optional[str] = None) -> Li
     """
     try:
         logger.info(f"Querying Qdrant for: '{query}' (clause_type: {clause_type})")
-        client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+        client = QdrantClient(host=settings.QDRANT_HOST, 
+                              port=settings.QDRANT_PORT,
+                              timeout=10, 
+                              check_compatibility=False)
         embeddings = get_embeddings()
         query_vector = embeddings.embed_query(query)
 
