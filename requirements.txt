@@ -5,27 +5,34 @@ python-dotenv
 
 # --- LLM & Agentic Orchestration ---
 langchain
-langchain-core 
+langchain-core
 langchain-community
 langchain-groq
+langchain-openai
 langgraph
+langgraph-checkpoint-sqlite
+aiosqlite
 
-# --- Embeddings & Vector Database ---
+# --- Embeddings, Vector Database & Document Parsing ---
 sentence-transformers
 qdrant-client
+pypdf
+duckduckgo_search
 
 # --- API & Web Interface ---
 fastapi
 uvicorn
 streamlit
 requests
-
-# --- User logins ---
-sqlalchemy
-pyjwt
-bcrypt
-python-multipart
-pydantic[email]
+pandas
 sse-starlette
 
+# --- User Logins & Security ---
+sqlalchemy
+pyjwt
+bcrypt<4.1.0
+python-multipart
+pydantic[email]
+
+# --- Reporting & Utilities ---
 reportlab
