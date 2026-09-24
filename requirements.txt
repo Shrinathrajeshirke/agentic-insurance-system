@@ -8,6 +8,7 @@ langchain
 langchain-core
 langchain-community
 langchain-groq
+langchain_huggingface
 langchain-openai
 langgraph
 langgraph-checkpoint-sqlite
