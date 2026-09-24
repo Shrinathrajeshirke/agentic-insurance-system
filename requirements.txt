@@ -19,3 +19,13 @@ fastapi
 uvicorn
 streamlit
 requests
+
+# --- User logins ---
+sqlalchemy
+pyjwt
+bcrypt
+python-multipart
+pydantic[email]
+sse-starlette
+
+reportlab
