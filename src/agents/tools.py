@@ -32,17 +32,17 @@ def _detect_clause_type(text: str) -> str:
         return "Claims & Payout Provisions"
     return "Terms & Conditions"
 
+def get_qdrant_client() -> QdrantClient:
+    if settings.QDRANT_URL and settings.QDRANT_API_KEY:
+        return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10.0)
+    return QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=5.0)
+
 @tool
 def search_policy_contracts(query: str, clause_type: str = None) -> list:
     """Queries indexed policy clauses in Qdrant and returns verified citations."""
     try:
         logger.info(f"Querying Qdrant for: '{query}'")
-        client = QdrantClient(
-            host=settings.QDRANT_HOST,
-            port=settings.QDRANT_PORT,
-            timeout=5.0,
-            check_compatibility=False
-        )
+        client = get_qdrant_client()
 
         query_vector = _embedding_model.encode(query).tolist()
 
@@ -116,12 +116,7 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
         )
         split_docs = text_splitter.split_documents(docs)
 
-        client = QdrantClient(
-            host=settings.QDRANT_HOST,
-            port=settings.QDRANT_PORT,
-            timeout=10.0,
-            check_compatibility=False
-        )
+        client = get_qdrant_client()
 
         points = []
         for doc in split_docs:

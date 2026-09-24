@@ -16,7 +16,13 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION_NAME: str = "term_insurance_policies"
-
+    QDRANT_URL: str = ""
+    QDRANT_API_KEY: str = ""
+    QDRANT_COLLECTION_NAME: str = "policy_clauses"
+    JWT_SECRET_KEY: str = "your-secret-key"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    
     class Config:
         env_file = ".env"
         extra = "ignore"

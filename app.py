@@ -3,8 +3,9 @@ import requests
 import json
 import uuid
 import pandas as pd
+import os
 
-API_BASE = "http://localhost:8000"
+API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 st.set_page_config(page_title="Term Life Policy Advisor", page_icon="🛡️", layout="wide")
 
