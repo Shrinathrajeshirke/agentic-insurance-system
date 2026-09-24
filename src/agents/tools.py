@@ -3,20 +3,35 @@ import uuid
 from langchain_core.tools import tool
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct
-from sentence_transformers import SentenceTransformer
 from duckduckgo_search import DDGS
 
 from src.config import settings
 from src.logger import logger
 from src.exception import CustomException
 
-logger.info("Initializing cached embedding model...")
-_embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Managed remote embeddings via HF Serverless API (Zero local RAM footprint)
+_embeddings = None
+
+def get_embedding_client():
+    global _embeddings
+    if _embeddings is None:
+        logger.info("Initializing HuggingFace Inference API embeddings client...")
+        _embeddings = HuggingFaceEndpointEmbeddings(
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            task="feature-extraction",
+            huggingfacehub_api_token=settings.HUGGINGFACEHUB_API_TOKEN,
+        )
+    return _embeddings
+
+def get_qdrant_client() -> QdrantClient:
+    if settings.QDRANT_URL and settings.QDRANT_API_KEY:
+        return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10.0)
+    return QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=5.0)
 
 def _detect_clause_type(text: str) -> str:
-    """Helper to detect common insurance policy sections."""
     lower = text.lower()
     if any(k in lower for k in ["suicide", "exclusion", "not covered", "exclusions"]):
         return "Exclusions & Restrictions"
@@ -32,19 +47,16 @@ def _detect_clause_type(text: str) -> str:
         return "Claims & Payout Provisions"
     return "Terms & Conditions"
 
-def get_qdrant_client() -> QdrantClient:
-    if settings.QDRANT_URL and settings.QDRANT_API_KEY:
-        return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10.0)
-    return QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=5.0)
-
 @tool
 def search_policy_contracts(query: str, clause_type: str = None) -> list:
     """Queries indexed policy clauses in Qdrant and returns verified citations."""
     try:
         logger.info(f"Querying Qdrant for: '{query}'")
         client = get_qdrant_client()
+        embeddings = get_embedding_client()
 
-        query_vector = _embedding_model.encode(query).tolist()
+        # Remote API call to HuggingFace
+        query_vector = embeddings.embed_query(query)
 
         if hasattr(client, "query_points"):
             response = client.query_points(
@@ -90,7 +102,6 @@ def web_search(query: str) -> str:
     except Exception as e:
         logger.warning(f"DuckDuckGo search failed: {e}")
 
-    # Grounded benchmark baseline when web scraping is throttled or empty
     return (
         "Indian Market Term Insurance Benchmark Rates (IRDAI Insurers, 28-30M, Non-Smoker, 1 Cr Cover, 30-35 Yr Term):\n"
         "1. HDFC Life Click 2 Protect Super: Base premium ~₹950 - ₹1,250/month (~₹11,000 - ₹14,500/year). Claim Settlement Ratio: 99.3%.\n"
@@ -115,10 +126,18 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
             chunk_overlap=120
         )
         split_docs = text_splitter.split_documents(docs)
-
         client = get_qdrant_client()
+        embeddings = get_embedding_client()
+
+        texts = [doc.page_content.strip() for doc in split_docs if doc.page_content.strip()]
+        if not texts:
+            return "No valid text chunks were found in the uploaded file."
+
+        # Remote API call to HuggingFace
+        vectors = embeddings.embed_documents(texts)
 
         points = []
+        valid_idx = 0
         for doc in split_docs:
             chunk_text = doc.page_content.strip()
             if not chunk_text:
@@ -126,12 +145,11 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
 
             page_num = doc.metadata.get("page", 0) + 1
             detected_sec = _detect_clause_type(chunk_text)
-            vector = _embedding_model.encode(chunk_text).tolist()
 
             points.append(
                 PointStruct(
                     id=str(uuid.uuid4()),
-                    vector=vector,
+                    vector=vectors[valid_idx],
                     payload={
                         "policy_name": policy_name,
                         "insurer": insurer,
@@ -142,6 +160,7 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
                     }
                 )
             )
+            valid_idx += 1
 
         if points:
             client.upsert(
@@ -150,6 +169,6 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
             )
             return f"Successfully indexed {len(points)} chunks with page tracking into Qdrant."
 
-        return "No valid text chunks were found in the uploaded file."
+        return "No points generated."
     except Exception as e:
         raise CustomException(e, sys)

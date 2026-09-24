@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Embedding Settings
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
-    
+    HUGGINGFACEHUB_API_TOKEN: str = ""
     # Qdrant Settings
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
