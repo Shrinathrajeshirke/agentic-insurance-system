@@ -5,7 +5,7 @@ import uuid
 import pandas as pd
 import os
 
-API_BASE = os.getenv("API_BASE", "http://localhost:8000")
+API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Term Life Policy Advisor", page_icon="🛡️", layout="wide")
 
@@ -345,9 +345,14 @@ else:
                 if received_citations:
                     with st.expander("🔍 Verified Contract Evidence & Citations", expanded=False):
                         for c in received_citations:
+                            insurer_name = c.get("insurer") or "Policy Document"
+                            policy_name = c.get("policy_name") or c.get("insurer") or "Term Insurance Plan"
+                            page_val = c.get("page", "N/A")
+                            section_val = c.get("section", "Contract Clause")
+                            snippet_val = c.get("snippet", "")
                             st.markdown(
-                                f"**{c['insurer']} — {c['policy_name']}** (Page {c['page']} | *{c['section']}*)\n"
-                                f"> *\"{c['snippet']}\"*\n"
+                                f"**{insurer_name} — {policy_name}** (Page {page_val} | *{section_val}*)\n"
+                                f"> *\"{snippet_val}\"*\n"
                             )
 
             st.session_state.messages.append({
@@ -406,9 +411,14 @@ else:
                 if msg.get("citations"):
                     with st.expander("🔍 Verified Contract Evidence & Citations", expanded=False):
                         for c in msg["citations"]:
+                            insurer_name = c.get("insurer") or "Policy Document"
+                            policy_name = c.get("policy_name") or c.get("insurer") or "Term Insurance Plan"
+                            page_val = c.get("page", "N/A")
+                            section_val = c.get("section", "Contract Clause")
+                            snippet_val = c.get("snippet", "")
                             st.markdown(
-                                f"**{c['insurer']} — {c['policy_name']}** (Page {c['page']} | *{c['section']}*)\n"
-                                f"> *\"{c['snippet']}\"*\n"
+                                f"**{insurer_name} — {policy_name}** (Page {page_val} | *{section_val}*)\n"
+                                f"> *\"{snippet_val}\"*\n"
                             )
 
         if prompt := st.chat_input("Ask about riders, exclusions, claim settlement, or return of premium..."):
@@ -438,9 +448,14 @@ else:
                 if received_citations:
                     with st.expander("🔍 Verified Contract Evidence & Citations", expanded=False):
                         for c in received_citations:
+                            insurer_name = c.get("insurer") or "Policy Document"
+                            policy_name = c.get("policy_name") or c.get("insurer") or "Term Insurance Plan"
+                            page_val = c.get("page", "N/A")
+                            section_val = c.get("section", "Contract Clause")
+                            snippet_val = c.get("snippet", "")
                             st.markdown(
-                                f"**{c['insurer']} — {c['policy_name']}** (Page {c['page']} | *{c['section']}*)\n"
-                                f"> *\"{c['snippet']}\"*\n"
+                                f"**{insurer_name} — {policy_name}** (Page {page_val} | *{section_val}*)\n"
+                                f"> *\"{snippet_val}\"*\n"
                             )
 
             st.session_state.messages.append({

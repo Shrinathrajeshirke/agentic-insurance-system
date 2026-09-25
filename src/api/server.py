@@ -14,7 +14,7 @@ from fastapi.responses import Response
 
 from src.tools.report_generator import generate_pdf_advisory_report
 from src.agents.graph import get_graph
-from src.agents.checkpointer import get_checkpointer
+from src.agents.checkpointer import get_async_checkpointer
 from src.agents.tools import ingest_policy_document
 from src.schema.user_profile import UserProfile
 from src.security.sanitizer import sanitize_user_profile_for_storage
@@ -31,15 +31,15 @@ checkpointer_cm = None
 async def lifespan(app: FastAPI):
     global agent_app, checkpointer_cm
     try:
-        checkpointer_cm = get_checkpointer()
-        cp = checkpointer_cm.__enter__()
-        # Compile graph with persistent PostgreSQL (or local fallback)
+        checkpointer_cm = get_async_checkpointer()
+        cp = await checkpointer_cm.__aenter__()
+        # Compile graph with the async checkpointer
         agent_app = get_graph(checkpointer=cp)
-        logger.info("LangGraph compiled successfully with durable checkpointer.")
+        logger.info("LangGraph compiled successfully with durable async checkpointer.")
         yield
     finally:
         if checkpointer_cm:
-            checkpointer_cm.__exit__(None, None, None)
+            await checkpointer_cm.__aexit__(None, None, None)
 
 app = FastAPI(title="Term Life Insurance Advisor API", lifespan=lifespan)
 
@@ -237,7 +237,8 @@ async def chat_stream_endpoint(
                     retrieved = output.get("retrieved_contexts", [])
                     clean_citations = [
                         {
-                            "insurer": r.get("insurer", "Policy"),
+                            "insurer": r.get("insurer", "Policy Document"),
+                            "policy_name": r.get("policy_name", r.get("insurer", "Term Insurance Contract")),
                             "page": r.get("page", "N/A"),
                             "section": r.get("section", "Contract Clause"),
                             "snippet": r.get("text", "")[:350] + ("..." if len(r.get("text", "")) > 350 else "")
@@ -259,8 +260,8 @@ async def chat_stream_endpoint(
             yield {"data": json.dumps({"done": True})}
 
         except Exception as err:
-            logger.error(f"Streaming error encountered: {err}")
-            yield {"data": json.dumps({"error": str(err)})}
+            logger.exception("Streaming error encountered:")
+            yield {"data": json.dumps({"error": repr(err) or type(err).__name__})}
 
     return EventSourceResponse(event_generator())
 

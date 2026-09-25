@@ -10,7 +10,6 @@ from src.schema.guardrails import evaluate_underwriting_guardrails
 from src.tools.calculator import calculate_policy_rates
 from src.agents.tools import search_policy_contracts
 from src.agents.llm import get_llm
-from src.agents.checkpointer import get_checkpointer
 from src.logger import logger
 from src.exception import CustomException
 
