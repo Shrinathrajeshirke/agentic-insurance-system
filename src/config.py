@@ -1,31 +1,51 @@
 import os
-from pydantic_settings import BaseSettings
+from typing import Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
+    # =========================================================================
+    # Application & Environment Settings
+    # =========================================================================
+    PROJECT_NAME: str = "Agentic IRDAI Life Insurance Advisory System"
     ENVIRONMENT: str = "development"
-    MODEL_PROVIDER: str = "groq"
+    LOG_LEVEL: str = "INFO"
 
-    # Groq Cloud Settings
-    OPENAI_API_KEY: str = ""
+    # =========================================================================
+    # OpenAI LLM Configuration
+    # =========================================================================
+    OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL_NAME: str = "gpt-4o-mini"
+    OPENAI_TEMPERATURE: float = 0.1
 
-    # Embedding Settings
+    # =========================================================================
+    # Hugging Face Embeddings Configuration
+    # =========================================================================
+    HUGGINGFACEHUB_API_TOKEN: Optional[str] = None
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
-    HUGGINGFACEHUB_API_TOKEN: str = ""
-    # Qdrant Settings
+
+    # =========================================================================
+    # Qdrant Vector Store Configuration
+    # =========================================================================
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
+    QDRANT_URL: Optional[str] = None
+    QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION_NAME: str = "term_insurance_policies"
-    QDRANT_URL: str = ""
-    QDRANT_API_KEY: str = ""
-    QDRANT_COLLECTION_NAME: str = "policy_clauses"
-    JWT_SECRET_KEY: str = "your-secret-key"
-    JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
-    
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
 
-# Export a single global settings instance
+    # =========================================================================
+    # Database Persistence Configuration (Neon / Supabase PostgreSQL)
+    # =========================================================================
+    DATABASE_URL: Optional[str] = None
+
+    # =========================================================================
+    # Pydantic V2 Configuration Settings
+    # =========================================================================
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+
 settings = Settings()

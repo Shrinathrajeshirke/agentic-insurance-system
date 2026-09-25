@@ -40,3 +40,7 @@ reportlab
 ## pytest
 pytest
 pytest-asyncio
+
+## PostgreSQL
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
