@@ -152,3 +152,50 @@ def calculate_benchmark_matrix(age: int, gender: str, is_smoker: bool, sum_assur
             "trop_monthly": f"₹{trop_variant['monthly_premium']:,}"
         })
     return matrix
+
+def calculate_policy_rates(
+    age: int,
+    smoker: bool = False,
+    sum_assured_crores: float = 1.0,
+    gender: str = "Male",
+    include_ci_rider: bool = False,
+    include_adb_rider: bool = False,
+    return_of_premium: bool = False
+) -> list:
+    """Convenience wrapper returning structured rates across all top 4 plans."""
+    # Convert numerical crore float (e.g. 1.0) to matching string key or fallback
+    cover_mapping = {
+        0.5: "50 Lakhs",
+        0.75: "75 Lakhs",
+        1.0: "1 Crore",
+        1.5: "1.5 Crore",
+        2.0: "2 Crore",
+        2.5: "2.5 Crore",
+        3.0: "3 Crore",
+        5.0: "5 Crore+",
+    }
+    sum_str = cover_mapping.get(sum_assured_crores, "1 Crore")
+    ci_val = 1000000 if include_ci_rider else 0       # 10 Lakhs CI cover
+    adb_val = 2500000 if include_adb_rider else 0     # 25 Lakhs ADB cover
+
+    results = []
+    for plan in BASE_RATE_TABLE.keys():
+        calc = calculate_exact_premium(
+            policy_name=plan,
+            age=age,
+            gender=gender,
+            is_smoker=smoker,
+            sum_assured_str=sum_str,
+            is_trop=return_of_premium,
+            critical_illness_cover=ci_val,
+            accidental_death_cover=adb_val
+        )
+        results.append({
+            "plan_name": calc["policy_name"],
+            "annual_premium": calc["net_annual_premium"],
+            "monthly_premium": calc["monthly_premium"],
+            "base_annual": calc["base_annual"],
+            "gst_applied_pct": calc["gst_rate_percent"],
+            "final_annual_payable": calc["net_annual_premium"]
+        })
+    return results

@@ -36,3 +36,7 @@ pydantic[email]
 
 # --- Reporting & Utilities ---
 reportlab
+
+## pytest
+pytest
+pytest-asyncio

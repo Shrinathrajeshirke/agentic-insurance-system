@@ -98,3 +98,136 @@ To ensure production readiness, custom logging and exception handling modules ha
   - **Modern Layout Standards**: Compliant with updated Streamlit container specifications (`width="stretch"` and `width="content"`).
 - **Conversational Checkpointing (`AsyncSqliteSaver`)**:
   - Local `conversations.db` SQLite store mapped to persistent `thread_id` records, preserving chat transcripts and extracted user state across restarts.
+
+## Phase 6: Cloud Deployment & Lifecycle Management
+
+The system is deployed using a zero-cost decoupled cloud architecture (Option A). An all-in-one containerized deployment on AWS EC2 (Option B) is documented for reference only and has not been deployed.
+
+### Option A: 100% Free Decoupled Cloud Deployment 
+
+```text
+   ┌─────────────────────────────────────────────────────────────┐
+   │ Streamlit Community Cloud (Frontend UI)                     │
+   │ - Reads API_BASE from .streamlit/secrets.toml               │
+   └──────────────────────────────┬──────────────────────────────┘
+                                  │ HTTPS Requests / SSE Streams
+                                  ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │ Render Web Service (FastAPI + LangGraph Backend)            │
+   │ - Python 3.11+ / Uvicorn                                    │
+   │ - Uses FastEmbed / HF API (fits <512MB RAM free tier limit) │
+   └──────────────────────────────┬──────────────────────────────┘
+                                  │ HTTPS Vector Searches
+                                  ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │ Qdrant Cloud Cluster (Managed Free Vector DB Tier)          │
+   │ - Permanent 1GB Cluster / 4GB Storage                       │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+- **Managed Vector Database (Qdrant Cloud)**: Provisioned a free-tier cluster on [cloud.qdrant.io](https://cloud.qdrant.io), then captured the cluster URL (e.g., `https://2c82aef7-613c-4618-8b37-d030af5052af.eu-central-1-0.aws.cloud.qdrant.io:6333`) and generated an API key for secure access.
+- **FastAPI Backend on Render**: Deployed the backend as a Render Web Service linked to the GitHub repository.
+  - **Runtime**: Python 3
+  - **Build Command**: `pip install -r requirements.txt`
+  - **Start Command**: `uvicorn src.api.server:app --host 0.0.0.0 --port $PORT`
+  - **Environment Variables**:
+    - `OPENAI_API_KEY`: OpenAI API key
+    - `QDRANT_URL`: Qdrant Cloud cluster endpoint
+    - `QDRANT_API_KEY`: Qdrant Cloud API key
+    - `QDRANT_COLLECTION_NAME`: `policy_clauses`
+    - `JWT_SECRET_KEY`: Secure 64-character hex string, generated via `python -c "import secrets; print(secrets.token_hex(32))"`
+    - `JWT_ALGORITHM`: `HS256`
+    - `ACCESS_TOKEN_EXPIRE_MINUTES`: `1440`
+  - The resulting public HTTPS endpoint (e.g., `https://agentic-insurance-system.onrender.com`) serves as the backend URL for the frontend.
+- **Streamlit Frontend on Streamlit Community Cloud**: Deployed `app.py` via [share.streamlit.io](https://term-life-insurance-advisor.streamlit.app/) and pointed it at the Render backend through App Settings → Secrets:
+
+  ```toml
+  API_BASE = "https://agentic-insurance-system.onrender.com"
+  ```
+
+- **Service Lifecycle Management (Render)**:
+  - **Automatic Idle Sleep**: Render's free tier spins the instance down into sleep mode after 15 minutes of inactivity (zero incoming requests), incurring zero active runtime.
+  - **Manual Suspension**: The service can be halted without losing configurations via Render Dashboard → Web Service → Settings / Action menu → **Suspend Web Service**, and restarted with **Resume Web Service**.
+
+### Option B: All-in-One Single Server Deployment on AWS EC2 (Docker Compose) — Reference Only
+ 
+> **Note:** This option has not been deployed. It is included for informational purposes as an alternative for dedicated hosting where all services run on a single Linux machine.
+ 
+- **EC2 Provisioning**:
+  - **Instance Type**: Minimum `t3.small` (2 GB RAM); `t3.medium` (4 GB RAM) recommended to handle model memory during build and runtime.
+  - **Operating System**: Ubuntu 22.04 LTS or 24.04 LTS.
+  - **Security Group Inbound Rules**: Port `22` (SSH), Port `8501` (Streamlit Frontend), Port `8000` (FastAPI REST backend).
+- **Production Docker Compose Configuration (`docker-compose.prod.yml`)**:
+```yaml
+  version: '3.8'
+ 
+  services:
+    qdrant:
+      image: qdrant/qdrant:latest
+      restart: always
+      ports:
+        - "6333:6333"
+      volumes:
+        - qdrant_storage:/qdrant/storage
+ 
+    backend:
+      build:
+        context: .
+        dockerfile: Dockerfile.api
+      restart: always
+      ports:
+        - "8000:8000"
+      environment:
+        - OPENAI_API_KEY=${OPENAI_API_KEY}
+        - QDRANT_HOST=qdrant
+        - QDRANT_PORT=6333
+        - QDRANT_COLLECTION_NAME=policy_clauses
+        - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+        - JWT_ALGORITHM=HS256
+      volumes:
+        - sqlite_data:/app
+      depends_on:
+        - qdrant
+ 
+    frontend:
+      build:
+        context: .
+        dockerfile: Dockerfile.streamlit
+      restart: always
+      ports:
+        - "8501:8501"
+      environment:
+        - API_BASE=http://<YOUR_EC2_PUBLIC_IP>:8000
+      depends_on:
+        - backend
+ 
+  volumes:
+    qdrant_storage:
+    sqlite_data:
+```
+ 
+- **Deployment Steps on EC2**:
+```bash
+  # Connect to instance
+  ssh -i your-key.pem ubuntu@<YOUR_EC2_PUBLIC_IP>
+ 
+  # Install Docker and Compose plugin
+  sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
+  sudo usermod -aG docker ubuntu
+  newgrp docker
+ 
+  # Clone repository and enter directory
+  git clone https://github.com/your-username/insurance_system.git
+  cd insurance_system
+ 
+  # Configure environment variables
+  cat <<EOF> .env
+  OPENAI_API_KEY=your_key_here
+  JWT_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+  EOF
+ 
+  # Start services in detached mode
+  docker compose -f docker-compose.prod.yml up -d --build
+```
+ 
+  Once running, the application would be accessible at `http://<YOUR_EC2_PUBLIC_IP>:8501`.
