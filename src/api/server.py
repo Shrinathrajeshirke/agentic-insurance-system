@@ -10,11 +10,11 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
 from fastapi.responses import Response
+
 from src.tools.report_generator import generate_pdf_advisory_report
-from src.agents.graph import workflow
+from src.agents.graph import get_graph
+from src.agents.checkpointer import get_checkpointer
 from src.agents.tools import ingest_policy_document
 from src.schema.user_profile import UserProfile
 from src.security.sanitizer import sanitize_user_profile_for_storage
@@ -25,14 +25,21 @@ import uvicorn
 
 # Global compiled agent instance
 agent_app = None
+checkpointer_cm = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent_app
-    async with AsyncSqliteSaver.from_conn_string("conversations.db") as checkpointer:
-        agent_app = workflow.compile(checkpointer=checkpointer)
-        logger.info("LangGraph compiled successfully with AsyncSqliteSaver.")
+    global agent_app, checkpointer_cm
+    try:
+        checkpointer_cm = get_checkpointer()
+        cp = checkpointer_cm.__enter__()
+        # Compile graph with persistent PostgreSQL (or local fallback)
+        agent_app = get_graph(checkpointer=cp)
+        logger.info("LangGraph compiled successfully with durable checkpointer.")
         yield
+    finally:
+        if checkpointer_cm:
+            checkpointer_cm.__exit__(None, None, None)
 
 app = FastAPI(title="Term Life Insurance Advisor API", lifespan=lifespan)
 
@@ -62,7 +69,9 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
-    user_profile: Dict[str, Any]
+    user_profile: Optional[Dict[str, Any]] = None
+    underwriting_flags: List[str] = []
+    quotes: List[Dict[str, Any]] = []
 
 # --- Auth Endpoints ---
 @app.post("/auth/register", response_model=TokenResponse)
@@ -170,7 +179,7 @@ def delete_thread(
 
     return {"status": "success", "message": "Session deleted."}
 
-# --- Async Streaming Chat Endpoint ---
+# --- Streaming Chat Endpoint ---
 @app.post("/chat/stream")
 async def chat_stream_endpoint(
     request: ChatRequest,
@@ -203,15 +212,15 @@ async def chat_stream_endpoint(
         elif msg.role == "assistant":
             langchain_messages.append(AIMessage(content=msg.content))
 
-    profile = UserProfile(**request.user_profile) if request.user_profile else UserProfile()
-    audit_safe = sanitize_user_profile_for_storage(profile.model_dump())
-    logger.info(f"Streaming request | User: {current_user.email} | Thread: {request.thread_id} | Profile: {audit_safe}")
-
+    profile_dict = request.user_profile or {}
     initial_state = {
         "messages": langchain_messages,
-        "user_profile": profile,
-        "retrieved_policies": [],
-        "next_action": ""
+        "user_profile": profile_dict,
+        "guardrail_passed": True,
+        "underwriting_flags": [],
+        "rate_quotes": [],
+        "retrieved_contexts": [],
+        "next_step": None
     }
 
     config = {"configurable": {"thread_id": request.thread_id}}
@@ -221,35 +230,34 @@ async def chat_stream_endpoint(
             citations_sent = False
             async for event in agent_app.astream_events(initial_state, config=config, version="v2"):
                 event_type = event.get("event")
-                
-                # Emit citations once retriever finishes
-                if not citations_sent and event_type == "on_chain_end" and event.get("name") == "retriever":
+
+                # Emit citations once retrieval_node finishes
+                if not citations_sent and event_type == "on_chain_end" and event.get("name") == "retrieval_node":
                     output = event.get("data", {}).get("output", {})
-                    retrieved = output.get("retrieved_policies", [])
+                    retrieved = output.get("retrieved_contexts", [])
                     clean_citations = [
                         {
-                            "insurer": r.get("insurer"),
-                            "policy_name": r.get("policy_name"),
+                            "insurer": r.get("insurer", "Policy"),
                             "page": r.get("page", "N/A"),
                             "section": r.get("section", "Contract Clause"),
                             "snippet": r.get("text", "")[:350] + ("..." if len(r.get("text", "")) > 350 else "")
                         }
-                        for r in retrieved if r.get("insurer") != "External Web Result"
+                        for r in retrieved
                     ]
                     if clean_citations:
                         yield {"data": json.dumps({"citations": clean_citations})}
                     citations_sent = True
 
-                # Stream tokens from advisor
+                # Stream tokens from advisor_node
                 if event_type == "on_chat_model_stream":
                     metadata = event.get("metadata", {})
-                    if metadata.get("langgraph_node") == "advisor":
+                    if metadata.get("langgraph_node") == "advisor_node":
                         chunk = event.get("data", {}).get("chunk")
                         if chunk and chunk.content:
                             yield {"data": json.dumps({"token": chunk.content})}
 
             yield {"data": json.dumps({"done": True})}
-        
+
         except Exception as err:
             logger.error(f"Streaming error encountered: {err}")
             yield {"data": json.dumps({"error": str(err)})}
@@ -284,21 +292,28 @@ async def chat_endpoint(
             elif msg.role == "assistant":
                 langchain_messages.append(AIMessage(content=msg.content))
 
-        profile = UserProfile(**request.user_profile) if request.user_profile else UserProfile()
+        profile_dict = request.user_profile or {}
         initial_state = {
             "messages": langchain_messages,
-            "user_profile": profile,
-            "retrieved_policies": [],
-            "next_action": ""
+            "user_profile": profile_dict,
+            "guardrail_passed": True,
+            "underwriting_flags": [],
+            "rate_quotes": [],
+            "retrieved_contexts": [],
+            "next_step": None
         }
 
         config = {"configurable": {"thread_id": request.thread_id}}
         final_state = await agent_app.ainvoke(initial_state, config=config)
 
         ai_reply = final_state["messages"][-1].content
-        updated_profile = final_state["user_profile"].model_dump()
 
-        return ChatResponse(reply=ai_reply, user_profile=updated_profile)
+        return ChatResponse(
+            reply=ai_reply,
+            user_profile=final_state.get("user_profile"),
+            underwriting_flags=final_state.get("underwriting_flags", []),
+            quotes=final_state.get("rate_quotes", [])
+        )
     except Exception as e:
         logger.error(f"Chat API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
