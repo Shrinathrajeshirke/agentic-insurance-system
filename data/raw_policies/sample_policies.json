@@ -1,32 +1,26 @@
 [
-    {
-        "policy_name": "Click 2 Protect Super",
-        "insurer": "HDFC Life",
-        "clause_type": "eligibility",
-        "entry_age_min": 18, 
-        "entry_age_max": 65,
-        "smoker_allowed": true,
-        "riders_available": ["Accidental Death", "Critical Illness"],
-        "content": "Eligibility Criteria: The minimum entry age for HDFC Life Click 2 Protect Super is 18 years, and the maximum entry age is 65 years. The maximum maturity age is 85 years for regular term coverage and 99 years for the whole life option. Premium rates differ strictly based on the applicant's declared tobacco or nicotine usage. Non-smokers are eligible for a discounted premium bracket."
-    },
-    {
-        "policy_name": "Click 2 Protect Super",
-        "insurer": "HDFC Life",
-        "clause_type": "exclusion",
-        "entry_age_min": 18,
-        "entry_age_max": 65,
-        "smoker_allowed": true,
-        "riders_available": ["Accidental Death", "Critical Illness"],
-        "content": "Suicide Exclusion Clause: If the life assured commits suicide, whether sane or insane, within 12 months from the date of commencement of risk or the date of revival of the policy, the policy shall be void. In such cases, the insurer will pay only 80% of the total premiums paid till the date of death, provided the policy is in force."
-    },
-    {
-        "policy_name": "Smart Secure Plus",
-        "insurer": "Max Life",
-        "clause_type": "rider",
-        "entry_age_min": 18,
-        "entry_age_max": 60,
-        "smoker_allowed": true,
-        "riders_available": ["Critical Illness", "Waiver of Premium"],
-        "content": "Critical Illness Rider Benefit: The Max Life Smart Secure Plus plan offers an accelerated Critical Illness benefit covering 40 specified severe illnesses. If the insured is diagnosed with any of these covered illnesses, the chosen rider sum assured is paid immediately as a lump sum, and the base policy sum assured is reduced by an equivalent amount. A waiting period of 90 days applies from the policy commencement date."
-    }
+  {
+    "insurer": "Max Life Smart Secure Plus",
+    "section": "Free-Look Period",
+    "page": 4,
+    "content": "The policyholder has a period of 30 days (for policies sourced electronically or via distance marketing) and 15 days (for physical policies) from the date of receipt of the policy document to review the terms and conditions. If disagreed, the policyholder may cancel by stating the reasons, receiving a full refund of premiums paid less proportionate risk premium, medical examination expenses, and stamp duty."
+  },
+  {
+    "insurer": "HDFC Life Click 2 Protect Super",
+    "section": "Grace Period & Revival",
+    "page": 7,
+    "content": "A grace period of 30 days is allowed for payment of yearly, half-yearly, and quarterly premiums. For monthly premium payment mode, a grace period of 15 days is allowed. The policy remains in full force during the grace period. If premium remains unpaid at the expiry of the grace period, the policy lapses."
+  },
+  {
+    "insurer": "Max Life Smart Secure Plus",
+    "section": "Surrender & Exit Value",
+    "page": 11,
+    "content": "Special Exit Value (Zero-Cost Exit): The policyholder can terminate the policy and receive a complete refund of all total premiums paid (excluding taxes and rider costs) provided the policy is active, the applicant has attained age 65 or completed 25 policy years, and the exit option is exercised within the designated window before policy termination."
+  },
+  {
+    "insurer": "General Statutory Norms",
+    "section": "Taxation & GST",
+    "page": 1,
+    "content": "As per individual life insurance tax regulations, individual pure term life insurance premiums enjoy a 0% effective GST rate for individual policyholders, and qualify for deduction under Section 80C of the Income Tax Act up to statutory limits."
+  }
 ]

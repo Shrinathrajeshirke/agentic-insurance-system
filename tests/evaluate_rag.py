@@ -1,94 +1,145 @@
-import os
 import json
-import uuid
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from langsmith import Client, evaluate
-from src.agents.graph import agent_app
-from src.schema.user_profile import UserProfile
-from src.config import settings
+import os
+import sys
+import asyncio
+from typing import Dict, Any
+from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
 
-client = Client(api_key=os.getenv("LANGCHAIN_API_KEY"))
+from src.schema.guardrails import evaluate_underwriting_guardrails
+from src.agents.tools import search_policy_contracts
+from src.config import settings
+from src.logger import logger
 
-judge_llm = ChatOpenAI(
-    api_key=settings.OPENAI_API_KEY,
-    model="gpt-4o-mini",
-    temperature=0
-)
 
-DATASET_NAME = "insurance_policy_ground_truth"
-
-# 1. Dataset Verification
-if not client.has_dataset(dataset_name=DATASET_NAME):
-    dataset = client.create_dataset(
-        dataset_name=DATASET_NAME,
-        description="Benchmark QA pairs for term life insurance clause accuracy"
+class EvaluationMetrics(BaseModel):
+    faithfulness_score: float = Field(
+        ..., description="Score between 0.0 and 1.0 indicating if all statements are grounded in retrieved context."
     )
-    client.create_examples(
-        inputs=[
-            {"question": "What is the suicide exclusion rule under HDFC Click 2 Protect Super?"},
-            {"question": "Does Max Life Smart Secure Plus provide a critical illness benefit, and is there a waiting period?"}
-        ],
-        outputs=[
-            {"expected": "Void within 12 months, 80% premium refunded."},
-            {"expected": "Covers 40 illnesses with a 90-day waiting period."}
-        ],
-        dataset_id=dataset.id
+    faithfulness_reasoning: str = Field(
+        ..., description="Brief justification for the faithfulness score."
+    )
+    context_relevance_score: float = Field(
+        ..., description="Score between 0.0 and 1.0 indicating if retrieved context contains the necessary answer."
+    )
+    context_relevance_reasoning: str = Field(
+        ..., description="Brief justification for context relevance."
     )
 
-# 2. Target Pipeline Function (with unique thread IDs)
-def target_pipeline(inputs: dict):
-    session_id = f"eval-{uuid.uuid4().hex[:8]}"
-    config = {"configurable": {"thread_id": session_id}}
-    
-    state = {
-        "messages": [HumanMessage(content=inputs["question"])],
-        "user_profile": UserProfile(),
-        "retrieved_policies": [],
-        "next_action": ""
-    }
-    result = agent_app.invoke(state, config=config)
+
+JUDGE_PROMPT = """You are an independent LLM Judge evaluating an Agentic RAG Insurance Advisory System.
+Evaluate the response based on the question and retrieved context chunks.
+
+User Question: {question}
+Retrieved Context:
+{context}
+
+Generated Answer: {answer}
+
+Criteria:
+1. Faithfulness (0.0 to 1.0): Does the answer make factual claims NOT supported by the context or underwriting rules?
+2. Context Relevance (0.0 to 1.0): Did the retrieved context contain the information needed to resolve the user's question?
+
+Respond strictly according to the schema.
+"""
+
+
+def run_llm_judge(question: str, context: str, answer: str) -> EvaluationMetrics:
+    """Invokes OpenAI LLM-as-a-judge with structured output."""
+    judge_llm = ChatOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        model_name="gpt-4o",
+        temperature=0.0
+    )
+    structured_judge = judge_llm.with_structured_output(EvaluationMetrics)
+    prompt = JUDGE_PROMPT.format(question=question, context=context, answer=answer)
+    return structured_judge.invoke(prompt)
+
+
+async def evaluate_test_case(test_case: Dict[str, Any]) -> Dict[str, Any]:
+    question = test_case["question"]
+    profile = test_case["profile"]
+
+    # 1. Run Underwriting Guardrail
+    is_valid, flags = evaluate_underwriting_guardrails(profile)
+
+    # 2. Retrieve Evidence Chunks from Qdrant
+    retrieved_chunks = search_policy_contracts.invoke({"query": question})
+    context_text = "\n---\n".join(
+        [f"[{c['insurer']} p.{c['page']}]: {c['text']}" for c in retrieved_chunks]
+    ) if retrieved_chunks else "No specific contract chunks retrieved."
+
+    # 3. Advisory generation simulation
+    flag_context = "\n".join(flags) if flags else "Underwriting Profile: Approved"
+    advisor_llm = ChatOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        model_name="gpt-4o-mini",
+        temperature=0.1
+    )
+
+    response = await advisor_llm.ainvoke(
+        f"Underwriting alerts:\n{flag_context}\n\n"
+        f"Context excerpts:\n{context_text}\n\n"
+        f"Question: {question}\n\n"
+        f"Provide an accurate, cited advisory answer based strictly on the above context and underwriting rules."
+    )
+    generated_answer = response.content
+
+    # 4. LLM Judge Assessment
+    eval_result = run_llm_judge(question, context_text, generated_answer)
+
+    # 5. Check keyword/topic alignment
+    keyword_hits = sum(1 for kw in test_case["expected_answer_keywords"] if kw.lower() in generated_answer.lower())
+    keyword_recall = round(keyword_hits / len(test_case["expected_answer_keywords"]), 2)
+
     return {
-        "answer": result["messages"][-1].content,
-        "retrieved_context": [p.get("text", "") for p in result.get("retrieved_policies", [])]
+        "id": test_case["id"],
+        "question": question,
+        "guardrail_passed": is_valid,
+        "flags_raised": len(flags),
+        "faithfulness": eval_result.faithfulness_score,
+        "context_relevance": eval_result.context_relevance_score,
+        "keyword_recall": keyword_recall
     }
 
-# 3. Groundedness Evaluator
-def evaluate_groundedness(run, example) -> dict:
-    answer = run.outputs.get("answer", "")
-    contexts = "\n".join(run.outputs.get("retrieved_context", []))
 
-    eval_prompt = f"""
-    Retrieved Context:
-    {contexts}
+async def main():
+    dataset_path = os.path.join(os.path.dirname(__file__), "golden_dataset.json")
+    if not os.path.exists(dataset_path):
+        print(f"Error: {dataset_path} not found.")
+        sys.exit(1)
 
-    Generated Answer:
-    {answer}
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        golden_dataset = json.load(f)
 
-    Task: Determine if the generated answer is completely grounded in the retrieved context without hallucinating unmentioned terms or clauses.
-    Respond strictly in JSON format:
-    {{"score": 1, "explanation": "grounded"}} OR {{"score": 0, "explanation": "hallucinated"}}
-    """
+    print(f"\n=======================================================")
+    print(f"  RUNNING RAG EVALUATION BENCHMARK ({len(golden_dataset)} Golden Scenarios)")
+    print(f"=======================================================\n")
 
-    res = judge_llm.invoke(eval_prompt).content.strip()
-    try:
-        clean = res.split("```json")[1].split("```")[0].strip() if "```json" in res else res
-        parsed = json.loads(clean)
-        return {"key": "faithfulness", "score": parsed.get("score", 0), "comment": parsed.get("explanation")}
-    except Exception:
-        return {"key": "faithfulness", "score": 1 if "1" in res else 0}
+    results = []
+    for tc in golden_dataset:
+        print(f"Evaluating {tc['id']}: {tc['question'][:60]}...")
+        res = await evaluate_test_case(tc)
+        results.append(res)
+
+    # Compute Aggregate Metrics
+    avg_faithfulness = sum(r["faithfulness"] for r in results) / len(results)
+    avg_relevance = sum(r["context_relevance"] for r in results) / len(results)
+    avg_recall = sum(r["keyword_recall"] for r in results) / len(results)
+
+    print("\n" + "=" * 65)
+    print("                 EVALUATION HARNESS SUMMARY            ")
+    print("=" * 65)
+    print(f"{'Test ID':<10} | {'Faithfulness':<14} | {'Relevance':<12} | {'Keyword Recall':<15}")
+    print("-" * 65)
+    for r in results:
+        print(f"{r['id']:<10} | {r['faithfulness']:<14.2f} | {r['context_relevance']:<12.2f} | {r['keyword_recall']:<15.2f}")
+    print("=" * 65)
+    print(f"MEAN FAITHFULNESS SCORE:       {avg_faithfulness:.2%}")
+    print(f"MEAN CONTEXT RELEVANCE SCORE:  {avg_relevance:.2%}")
+    print(f"KEYWORD / CLAUSE RECALL:       {avg_recall:.2%}")
+    print("=" * 65)
+
 
 if __name__ == "__main__":
-    print("Running LangSmith Evaluation benchmark sequentially...")
-    results = evaluate(
-        target_pipeline,
-        data=DATASET_NAME,
-        evaluators=[evaluate_groundedness],
-        experiment_prefix="rag-groundedness-test",
-        max_concurrency=1
-    )
-    print("Evaluation successfully finished!")
+    asyncio.run(main())

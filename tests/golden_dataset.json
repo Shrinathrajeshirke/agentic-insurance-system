@@ -1,0 +1,106 @@
+[
+  {
+    "id": "TC-01",
+    "question": "What happens if the policyholder commits suicide within the first 12 months?",
+    "expected_clause_topic": "Exclusions & Restrictions",
+    "expected_answer_keywords": ["suicide", "12 months", "80%", "premiums paid"],
+    "profile": {
+      "age": 30,
+      "gender": "Male",
+      "annual_income": "10 - 15 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-02",
+    "question": "How long is the free-look period for an online policy, and can I cancel?",
+    "expected_clause_topic": "Free-Look Period",
+    "expected_answer_keywords": ["free look", "30 days", "refund"],
+    "profile": {
+      "age": 28,
+      "gender": "Female",
+      "annual_income": "6 - 10 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 35
+    }
+  },
+  {
+    "id": "TC-03",
+    "question": "What is the grace period for premium payments if I pay monthly vs annually?",
+    "expected_clause_topic": "Grace Period & Revival",
+    "expected_answer_keywords": ["15 days", "30 days", "grace period", "lapse"],
+    "profile": {
+      "age": 34,
+      "gender": "Male",
+      "annual_income": "10 - 15 Lakhs",
+      "desired_sum_assured": "1.5 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-04",
+    "question": "Can I get a 2 Crore cover if I earn 4 Lakhs per year at age 26?",
+    "expected_clause_topic": "Underwriting & HLV",
+    "expected_answer_keywords": ["HLV", "multiplier", "25x", "exceeds"],
+    "profile": {
+      "age": 26,
+      "gender": "Male",
+      "annual_income": "3 - 6 Lakhs",
+      "desired_sum_assured": "2 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-05",
+    "question": "What is the Special Exit Value (zero-cost exit) and how does it work?",
+    "expected_clause_topic": "Surrender & Exit Value",
+    "expected_answer_keywords": ["special exit", "zero cost", "premiums returned", "age 65"],
+    "profile": {
+      "age": 32,
+      "gender": "Male",
+      "annual_income": "15 - 25 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 35
+    }
+  },
+  {
+    "id": "TC-06",
+    "question": "Can a 67-year-old buy a standard pure term insurance plan?",
+    "expected_clause_topic": "Entry Age Guardrail",
+    "expected_answer_keywords": ["65 years", "maximum entry age", "CRITICAL"],
+    "profile": {
+      "age": 67,
+      "gender": "Male",
+      "annual_income": "15 - 25 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 10
+    }
+  },
+  {
+    "id": "TC-07",
+    "question": "Are critical illness and accidental death riders covered under pure term base rates?",
+    "expected_clause_topic": "Riders & Add-on Benefits",
+    "expected_answer_keywords": ["rider", "additional premium", "critical illness"],
+    "profile": {
+      "age": 29,
+      "gender": "Female",
+      "annual_income": "6 - 10 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-08",
+    "question": "What is the GST rate applied on pure term life insurance premiums for individuals?",
+    "expected_clause_topic": "Taxation",
+    "expected_answer_keywords": ["0%", "GST", "individual"],
+    "profile": {
+      "age": 31,
+      "gender": "Male",
+      "annual_income": "10 - 15 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 30
+    }
+  }
+]
