@@ -28,7 +28,7 @@ To ensure production readiness, custom logging and exception handling modules ha
 ## Phase 1: Infrastructure & Environment Setup
 
 - **Vector DB Infrastructure (`docker-compose.yml`)**: Deployed Qdrant with persistent local volume storage (`./data/qdrant_storage`) exposed on ports 6333 (REST) and 6334 (gRPC).
-- **Environment & Settings Management (`src/config.py` & `.env`)**: Implemented type-safe environment configuration with `pydantic-settings` configured for OpenAI (`gpt-4o-mini` for agent nodes, `gpt-4o` for evaluation judges), JWT authentication parameters, and local CPU-efficient embeddings (`sentence-transformers/all-MiniLM-L6-v2`).
+- **Environment & Settings Management (`src/config.py` & `.env`)**: Implemented type-safe environment configuration, refactored to **Pydantic v2** standards, with `pydantic-settings` configured for OpenAI (`gpt-4o-mini` for agent nodes, `gpt-4o` for evaluation judges), JWT authentication parameters, an optional `DATABASE_URL` for the production Postgres checkpointer, and local CPU-efficient embeddings (`sentence-transformers/all-MiniLM-L6-v2`).
 
 ## Step 2: Domain Schemas, LLM Factory & Verification
 
@@ -71,18 +71,24 @@ To ensure production readiness, custom logging and exception handling modules ha
   - `guardrail_node`: Evaluates profile parameters through the deterministic underwriting rule engine, injecting non-negotiable underwriting flags before retrieval.
   - `retriever_node`: Executes exact demographic rate calculations, searches Qdrant for contract evidence, and conditionally enriches context with benchmark market disclosures.
   - `advisor_node`: Synthesizes verified contract excerpts, calculated rupee numbers, and underwriting alerts into an IRDAI-compliant advisory assessment with cited reference tags.
-- **Graph Compilation**: Fully asynchronous workflow compiled with `AsyncSqliteSaver` checkpointer integration for persistent conversation sessions.
+- **Graph Compilation**: Fully asynchronous workflow compiled with checkpointer integration (see **Async Postgres Checkpointing** in Phase 5) for persistent conversation sessions.
+- **Full Async Execution Pipeline**: Resolved a `NotImplementedError` surfaced by LangGraph's event loop by routing all graph execution, token streaming, and checkpoint reads/writes through the async interface end-to-end — `astream_events(..., version="v2")` for streaming, and async context managers for FastAPI's `lifespan` and the checkpointer connection pool.
+- **Robust Schema Normalization**: Aligned the `AgentState` dictionary (`user_profile`, `guardrail_passed`, `underwriting_flags`, `rate_quotes`, `retrieved_contexts`) with the FastAPI request/response schemas, with defensive key lookups and fallback labels to prevent client-side rendering crashes (e.g. `KeyError: 'policy_name'`) when a node returns a partial state.
 
 ## Phase 5: Privacy, Persistence, Reporting & UI
 
 - **Data Privacy & Sanitization (`src/security/sanitizer.py`)**:
   - Pure-Python regex pattern matching to mask structured identifiers (Credit Cards, SSNs, Emails, Phone numbers, Dates of Birth, ZIP codes).
   - Dictionary key scrubbing to mask sensitive user profile traits (Medical conditions, Gender) before writing state to logs or internal databases.
+  - `sanitize_user_profile_for_storage`: applies masking to the `UserProfile` state before it is persisted or logged, keeping PII out of both the checkpointer store and application logs.
+- **Async PostgreSQL (Neon) Checkpointing for Production Persistence**:
+  - Upgraded the LangGraph checkpointer from ephemeral/local SQLite to managed PostgreSQL, using `AsyncPostgresSaver` from `langgraph.checkpoint.postgres.aio`, so multi-turn conversation state, graph snapshots, and thread histories survive redeploys and service restarts rather than being wiped by an ephemeral filesystem.
+  - Falls back gracefully to `AsyncSqliteSaver` for local, offline development whenever `DATABASE_URL` is not set, so no Postgres instance is required to run the project locally.
 - **FastAPI Service Layer (`src/api/server.py`)**:
-  - Built-in lifespan management initializing `AsyncSqliteSaver` against `conversations.db`.
+  - Built-in async `lifespan` management initializing the checkpointer (`AsyncPostgresSaver` against Neon in production, `AsyncSqliteSaver` locally).
   - Secure JWT authentication endpoints (`/auth/register`, `/auth/login`).
   - Thread lifecycle management routes to create, list, rename (`PATCH /threads/{id}/rename`), and delete (`DELETE /threads/{id}`) advisory sessions.
-  - Real-time Server-Sent Events (SSE) streaming endpoint (`/chat/stream`) emitting incremental token chunks and citation metadata payloads.
+  - Real-time Server-Sent Events (SSE) streaming endpoint (`POST /chat/stream`) emitting incremental token chunks alongside mid-stream citation events: once `retriever_node` finishes, structured policy clauses (insurer, contract clause, page number, text snippet) are pushed as SSE events and rendered immediately in the Streamlit UI without interrupting generation.
   - Multipart document ingestion endpoint (`/upload_brochure`) indexing custom PDF filings with page-level tracking.
   - Report export endpoint (`/export_advisory_pdf`) serving generated PDF advisory briefs.
 - **Automated PDF Advisory Report Generator (`src/tools/report_generator.py`)**:
@@ -96,21 +102,48 @@ To ensure production readiness, custom logging and exception handling modules ha
   - **Side-by-Side Comparison Matrix**: Expandable table comparing Claim Settlement Ratio (CSR by count), Amount Settlement Ratio (ASR by value), Critical Illness counts, Zero-Cost Exit (SEV) options, and suicide exclusion rules across top insurers.
   - **PDF Download Action**: One-click "📥 Download PDF Report" button retrieving compiled ReportLab advisory briefs from the backend.
   - **Modern Layout Standards**: Compliant with updated Streamlit container specifications (`width="stretch"` and `width="content"`).
-- **Conversational Checkpointing (`AsyncSqliteSaver`)**:
-  - Local `conversations.db` SQLite store mapped to persistent `thread_id` records, preserving chat transcripts and extracted user state across restarts.
+- **Conversational Checkpointing**:
+  - Production: managed PostgreSQL (Neon) via `AsyncPostgresSaver`, mapped to persistent `thread_id` records, preserving chat transcripts and extracted user state across restarts and redeploys.
+  - Local development: `conversations.db` SQLite via `AsyncSqliteSaver` when `DATABASE_URL` is unset.
 
-## Automated Evaluation & Production Benchmarks
+## Automated Evaluation & Testing
 
-The system incorporates an automated RAG evaluation harness (`tests/evaluate_rag.py`) executing against a curated golden dataset of IRDAI insurance scenarios. Metric verification is performed via LLM-as-a-judge (`gpt-4o`) scoring groundedness and context relevance.
+The system is checked at two levels: an LLM-judged evaluation of the RAG pipeline's answers, and deterministic unit tests of the underwriting rule engine and pricing calculator.
 
-### Benchmark Results (Golden Dataset N=8 Scenarios)
+### RAG Evaluation Harness (`tests/evaluate_rag.py`)
 
-| Evaluation Metric | Score | Target | Evaluation Method |
-| :--- | :--- | :--- | :--- |
-| **Faithfulness / Groundedness** | **94.2%** | $\ge 90.0\%$ | `gpt-4o` Judge (Checks for zero ungrounded policy claims) |
-| **Context Relevance** | **88.5%** | $\ge 85.0\%$ | Vector chunk relevance against expected clause topics |
-| **Underwriting Guardrail Accuracy** | **100.0%** | $100.0\%$ | Deterministic validation on entry age & HLV boundaries |
-| **Domain Keyword Recall** | **91.8%** | $\ge 85.0\%$ | Strict keyword matching (Grace period, Suicide, SEV, Free-look) |
+Runs the full pipeline (guardrail check → Qdrant retrieval → advisory generation) against an 8-scenario golden dataset (`tests/golden_dataset.json`) covering exclusions, grace period, free-look, HLV underwriting limits, entry-age boundaries, riders, and GST. Each answer is scored by a `gpt-4o` judge for **faithfulness** (are claims grounded in the retrieved context and underwriting rules?) and **context relevance** (did retrieval surface the right clause?), plus a keyword-recall check against expected terms per scenario.
+
+**Results (N=8, latest run):**
+
+| Test ID | Scenario | Faithfulness | Context Relevance | Keyword Recall |
+| :--- | :--- | :--- | :--- | :--- |
+| TC-01 | Suicide exclusion (12-month) | 1.00 | 1.00 | 1.00 |
+| TC-02 | Free-look period | 1.00 | 1.00 | 0.67 |
+| TC-03 | Grace period (monthly vs annual) | 1.00 | 1.00 | 0.75 |
+| TC-04 | HLV limit (2 Cr @ ₹4L income) | 0.30 | 0.20 | 0.50 |
+| TC-05 | Special Exit Value | 1.00 | 1.00 | 0.25 |
+| TC-06 | Entry age (67, over ceiling) | 0.90 | 1.00 | 0.67 |
+| TC-07 | Riders (CI / ADB) | 0.90 | 0.80 | 0.67 |
+| TC-08 | 0% GST on individual term | 1.00 | 1.00 | 1.00 |
+
+| Metric | Mean |
+| :--- | :--- |
+| **Faithfulness / Groundedness** | **88.75%** |
+| **Context Relevance** | **87.50%** |
+| **Keyword / Clause Recall** | **68.88%** |
+
+**Known gap — TC-04:** the HLV-limit scenario scores well below the rest (0.30 faithfulness, 0.20 relevance). The underwriting guardrail itself flags this case correctly (see the deterministic test below), but the advisor node's generated answer is not well-grounded for this scenario, and retrieval isn't surfacing the right HLV clause context. This is a known, tracked limitation rather than an overall system weakness — the other 7 scenarios all score ≥ 0.80 on both metrics.
+
+*Keyword recall is a strict substring match and under-reports quality on paraphrased answers (e.g., TC-05 scores 0.25 despite the surrounding faithfulness/relevance scores being 1.00), so it's tracked as a secondary signal rather than a pass/fail gate.*
+
+### Deterministic Unit Tests (`tests/test_guardrails.py`, `tests/test_calculator.py`)
+
+The underwriting rule engine (entry age, maturity ceiling, HLV multiplier bands, income gating) and the actuarial rate calculator (age-bracket pricing, smoker/gender/TROP loadings, riders, 0% GST) are covered by a `pytest` suite, run automatically on every push via GitHub Actions (`.github/workflows/ci.yml`).
+
+```bash
+pytest
+```
 
 ## Phase 6: Cloud Deployment & Lifecycle Management
 
@@ -244,21 +277,3 @@ The system is deployed using a zero-cost decoupled cloud architecture (Option A)
 ```
  
   Once running, the application would be accessible at `http://<YOUR_EC2_PUBLIC_IP>:8501`.
-
-  ## Automated Evaluation & Production Benchmarks
-
-The system incorporates an automated RAG evaluation harness (`tests/evaluate_rag.py`) running against an 8-scenario golden evaluation dataset of IRDAI term insurance rules. Metric scoring is performed via LLM-as-a-judge (`gpt-4o`) evaluating context relevance and faithfulness, supplemented by deterministic underwriting validation.
-
-### Benchmark Results (N=8 Golden Scenarios)
-
-| Evaluation Metric | Measured Score | Target Baseline | Evaluation Methodology |
-| :--- | :--- | :--- | :--- |
-| **Faithfulness / Groundedness** | **92.50%** | $\ge 90.0\%$ | `gpt-4o` Judge (penalizes any ungrounded factual claims) |
-| **Context Relevance** | **88.75%** | $\ge 85.0\%$ | Vector chunk relevance against expected clause topics in Qdrant |
-| **Underwriting Guardrail Accuracy** | **100.0%** | $100.0\%$ | Deterministic pytest suite (Entry age & HLV boundaries) |
-| **Mean Advisory Latency** | **1.84s** | $\le 2.50s$ | Token stream logging across LangGraph execution path |
-
-#### Scenario Breakdown
-* **Exclusions & Clauses (Suicide, Free-Look, Grace Period, SEV, 0% GST)**: 100% Context Relevance and 1.00 Faithfulness.
-* **Underwriting Boundary Queries**: Handled via deterministic guardrails prior to vector search, preventing hallucinations on financial eligibility limits.
-
