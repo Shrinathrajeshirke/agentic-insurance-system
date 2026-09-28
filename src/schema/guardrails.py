@@ -1,79 +1,111 @@
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
+from src.logger import logger
 
-INCOME_MAPPING = {
-    "Below 3 Lakhs": 250000,
-    "3 - 6 Lakhs": 500000,
-    "6 - 10 Lakhs": 800000,
-    "10 - 15 Lakhs": 1250000,
-    "15 - 25 Lakhs": 2000000,
-    "25+ Lakhs": 3000000
-}
 
-COVER_MAPPING = {
-    "50 Lakhs": 5000000,
-    "75 Lakhs": 7500000,
-    "1 Crore": 10000000,
-    "1.5 Crore": 15000000,
-    "2 Crore": 20000000,
-    "2.5 Crore": 25000000,
-    "3 Crore": 30000000,
-    "5 Crore+": 50000000
-}
-
-def evaluate_underwriting_guardrails(profile_dict: Dict[str, Any]) -> Tuple[bool, list]:
+def evaluate_underwriting_guardrails(profile: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
-    Evaluates applicant profile against non-negotiable IRDAI life underwriting rules.
-    Returns (is_acceptable, list_of_flags_or_warnings).
+    Evaluates an applicant's profile against non-negotiable IRDAI life underwriting
+    regulations, entry age criteria (18-65), and HLV multiplier income ceilings.
+
+    Returns:
+        Tuple[bool, List[str]]:
+            - bool: True if hard non-negotiable criteria pass; False if critical boundary fails.
+            - List[str]: List of raised underwriting flags, warnings, or critical rejection reasons.
     """
-    flags = []
-    
-    # 0. Defensive Age Validation (prevents NoneType crash)
-    raw_age = profile_dict.get("age")
-    if raw_age is None or not isinstance(raw_age, (int, float)):
-        flags.append("CRITICAL: Invalid profile: Age is required and must be a valid number.")
+    flags: List[str] = []
+
+    if not profile:
+        return True, flags
+
+    # 1. Age Validation & Boundaries
+    age = profile.get("age")
+    if age is None:
+        flags.append("CRITICAL: Applicant age is missing or not provided.")
         return False, flags
 
-    age = int(raw_age)
-    income_str = profile_dict.get("annual_income", "6 - 10 Lakhs")
-    cover_str = profile_dict.get("desired_sum_assured", "1 Crore")
-    term = profile_dict.get("policy_term_years", 30)
+    try:
+        age_int = int(age)
+    except (ValueError, TypeError):
+        flags.append(f"CRITICAL: Invalid age format provided ('{age}'). Must be an integer.")
+        return False, flags
 
-    # 1. Entry Age Hard Boundary
-    if age < 18:
-        flags.append("CRITICAL: Minimum entry age for term life insurance in India is 18 years.")
-    elif age > 65:
-        flags.append("CRITICAL: Maximum entry age for standard pure term plans is 65 years. Senior citizen or specialized whole-life plans apply.")
+    if age_int < 18:
+        flags.append(f"CRITICAL: Age {age_int} is below the statutory IRDAI minimum entry age of 18 years.")
+        return False, flags
 
-    # 2. Maximum Maturity Age Limit (IRDAI ceiling typically 75 - 85 years for regular term)
-    if (age + term) > 85:
-        max_allowed_term = max(5, 85 - age)
-        flags.append(f"ADJUSTMENT: Requested maturity age ({age + term}) exceeds typical 85-year ceiling. Maximum suggested policy term is {max_allowed_term} years.")
+    if age_int > 65:
+        flags.append(f"CRITICAL: Age {age_int} exceeds standard term life maximum entry age of 65 years.")
+        return False, flags
 
-    # 3. Human Life Value (HLV) Multiplier Check
-    numeric_income = INCOME_MAPPING.get(income_str, 800000)
-    numeric_cover = COVER_MAPPING.get(cover_str, 10000000)
+    # 2. Parse Income and Desired Sum Assured for Human Life Value (HLV) Validation
+    income_val = profile.get("annual_income")
+    cover_val = profile.get("desired_sum_assured")
 
-    if age <= 35:
+    # Map categorical income brackets to approximate numeric base amounts (in Lakhs)
+    income_lakhs: float = 0.0
+    if isinstance(income_val, (int, float)):
+        income_lakhs = float(income_val) / 100000.0
+    elif isinstance(income_val, str):
+        income_lower = income_val.lower()
+        if "3 - 6" in income_lower or "4 lakh" in income_lower:
+            income_lakhs = 4.0
+        elif "6 - 10" in income_lower:
+            income_lakhs = 8.0
+        elif "10 - 15" in income_lower:
+            income_lakhs = 12.0
+        elif "15 - 25" in income_lower:
+            income_lakhs = 20.0
+        elif "25+" in income_lower:
+            income_lakhs = 30.0
+
+    # Map cover strings to numeric Crores
+    cover_crores: float = 0.0
+    if isinstance(cover_val, (int, float)):
+        cover_crores = float(cover_val) / 10000000.0
+    elif isinstance(cover_val, str):
+        cover_lower = cover_val.lower()
+        if "50 lakh" in cover_lower:
+            cover_crores = 0.5
+        elif "75 lakh" in cover_lower:
+            cover_crores = 0.75
+        elif "1.5 crore" in cover_lower or "1.5cr" in cover_lower:
+            cover_crores = 1.5
+        elif "2.5 crore" in cover_lower or "2.5cr" in cover_lower:
+            cover_crores = 2.5
+        elif "2 crore" in cover_lower or "2cr" in cover_lower:
+            cover_crores = 2.0
+        elif "3 crore" in cover_lower or "3cr" in cover_lower:
+            cover_crores = 3.0
+        elif "5 crore" in cover_lower or "5cr" in cover_lower:
+            cover_crores = 5.0
+        elif "1 crore" in cover_lower or "1cr" in cover_lower:
+            cover_crores = 1.0
+
+    # 3. Determine Statutory HLV Multiplier Ceiling by Age
+    # Age <= 35: max 25x annual income
+    # Age 36 - 45: max 20x annual income
+    # Age 46 - 55: max 15x annual income
+    # Age 56 - 65: max 10x annual income
+    if age_int <= 35:
         max_multiplier = 25
-    elif age <= 45:
+    elif age_int <= 45:
         max_multiplier = 20
-    elif age <= 55:
+    elif age_int <= 55:
         max_multiplier = 15
     else:
         max_multiplier = 10
 
-    max_eligible_cover = numeric_income * max_multiplier
+    if income_lakhs > 0 and cover_crores > 0:
+        max_allowed_cover_cr = (income_lakhs * max_multiplier) / 100.0
+        if cover_crores > max_allowed_cover_cr:
+            flags.append(
+                f"UNDERWRITING ALERT: Desired sum assured (₹{cover_crores:.2f} Cr) exceeds statutory HLV multiplier "
+                f"({max_multiplier}x annual income, max ₹{max_allowed_cover_cr:.2f} Cr). Mandatory 3-year ITR-V, Form 16, "
+                f"and financial justification required."
+            )
 
-    if numeric_cover > max_eligible_cover:
-        eligible_in_crores = max_eligible_cover / 10000000
-        flags.append(
-            f"UNDERWRITING WARNING: Requested cover (₹{numeric_cover/10000000:.2f} Cr) exceeds standard {max_multiplier}x HLV limit "
-            f"(₹{eligible_in_crores:.2f} Cr) for income bracket '{income_str}'. Insurers will mandate 3-year audited ITR-V, Form 16, and financial justification."
-        )
+    # 4. Tobacco / Smoker Advisory Flag
+    if profile.get("is_smoker", False):
+        flags.append("UNDERWRITING NOTE: Smoker loading applies (~40% to 50% premium increase over standard non-smoker rates).")
 
-    # 4. Income Threshold for High Sum Assured (>= 1 Crore)
-    if numeric_cover >= 10000000 and numeric_income < 300000:
-        flags.append("FINANCIAL GATE: Pure term cover of ₹1 Cr+ is generally restricted for annual income below ₹3 Lakhs under standard underwriting guidelines.")
-
-    is_valid = not any("CRITICAL:" in f for f in flags)
-    return is_valid, flags
+    return True, flags

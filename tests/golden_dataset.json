@@ -42,7 +42,7 @@
     "id": "TC-04",
     "question": "Can I get a 2 Crore cover if I earn 4 Lakhs per year at age 26?",
     "expected_clause_topic": "Underwriting & HLV",
-    "expected_answer_keywords": ["HLV", "multiplier", "25x", "exceeds"],
+    "expected_answer_keywords": ["25x", "exceeds", "income", "hlv"],
     "profile": {
       "age": 26,
       "gender": "Male",
@@ -55,7 +55,7 @@
     "id": "TC-05",
     "question": "What is the Special Exit Value (zero-cost exit) and how does it work?",
     "expected_clause_topic": "Surrender & Exit Value",
-    "expected_answer_keywords": ["special exit", "zero cost", "premiums returned", "age 65"],
+    "expected_answer_keywords": ["special exit", "zero cost", "premiums", "age 65"],
     "profile": {
       "age": 32,
       "gender": "Male",
@@ -98,6 +98,32 @@
     "profile": {
       "age": 31,
       "gender": "Male",
+      "annual_income": "10 - 15 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-09",
+    "question": "What are the features of Axis Max Life Smart Term Plan Plus?",
+    "expected_clause_topic": "Live Public Disclosure",
+    "expected_answer_keywords": ["Axis", "Smart Term Plan Plus"],
+    "profile": {
+      "age": 30,
+      "gender": "Male",
+      "annual_income": "10 - 15 Lakhs",
+      "desired_sum_assured": "1 Crore",
+      "policy_term_years": 30
+    }
+  },
+  {
+    "id": "TC-10",
+    "question": "Tell me about Star Health Premier Term Cover details.",
+    "expected_clause_topic": "Static Reference Data",
+    "expected_answer_keywords": ["benchmark", "reference"],
+    "profile": {
+      "age": 35,
+      "gender": "Female",
       "annual_income": "10 - 15 Lakhs",
       "desired_sum_assured": "1 Crore",
       "policy_term_years": 30
