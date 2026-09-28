@@ -49,3 +49,5 @@ psycopg2-binary
 ## ranker
 flashrank
 rank-bm25
+
+slowapi
