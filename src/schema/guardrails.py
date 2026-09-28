@@ -26,7 +26,14 @@ def evaluate_underwriting_guardrails(profile_dict: Dict[str, Any]) -> Tuple[bool
     Returns (is_acceptable, list_of_flags_or_warnings).
     """
     flags = []
-    age = profile_dict.get("age", 28)
+    
+    # 0. Defensive Age Validation (prevents NoneType crash)
+    raw_age = profile_dict.get("age")
+    if raw_age is None or not isinstance(raw_age, (int, float)):
+        flags.append("CRITICAL: Invalid profile: Age is required and must be a valid number.")
+        return False, flags
+
+    age = int(raw_age)
     income_str = profile_dict.get("annual_income", "6 - 10 Lakhs")
     cover_str = profile_dict.get("desired_sum_assured", "1 Crore")
     term = profile_dict.get("policy_term_years", 30)

@@ -94,18 +94,34 @@ def calculate_exact_premium(
     Computes exact indicative premium figures including base rates,
     smoker loading, gender discount, riders, and zero individual GST.
     """
-    plan_data = BASE_RATE_TABLE.get(policy_name, BASE_RATE_TABLE["Max Life Smart Secure Plus"])
+    # 0a. Check Age Validity
+    if age is None or not isinstance(age, (int, float)):
+        raise ValueError(f"Invalid age: {age}. Age must be a numeric integer.")
+    if age < 18:
+        raise ValueError(f"Underwriting restriction: Age {age} is below minimum eligible age of 18.")
+
+    # 0b. Reject Unknown Plan Names (Eliminates silent fallback)
+    if policy_name not in BASE_RATE_TABLE:
+        raise ValueError(
+            f"Unsupported policy: '{policy_name}'. Must be one of: {list(BASE_RATE_TABLE.keys())}"
+        )
+
+    plan_data = BASE_RATE_TABLE[policy_name]
     cover_numeric = COVER_TO_NUMERIC.get(sum_assured_str, 10000000)
     cover_units_cr = cover_numeric / 10000000.0
 
     # 1. Match Age Bracket
-    base_rate_per_cr = 10000
+    base_rate_per_cr = None
     for (min_age, max_age), rate in plan_data["base_per_cr"].items():
         if min_age <= age <= max_age:
             base_rate_per_cr = rate
             break
-    if age > 60:
-        base_rate_per_cr = 55000
+
+    if base_rate_per_cr is None:
+        if age > 60:
+            base_rate_per_cr = 55000
+        else:
+            raise ValueError(f"No actuarial rate bracket found for age {age}.")
 
     # 2. Apply Demographic Multipliers
     base_annual = base_rate_per_cr * cover_units_cr
