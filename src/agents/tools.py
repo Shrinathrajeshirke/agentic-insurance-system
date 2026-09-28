@@ -86,7 +86,7 @@ def search_policy_contracts(query: str, clause_type: str = None) -> list:
             })
         return results
     except Exception as e:
-        logger.warning(f"Qdrant query failed ({e}). Falling back to empty results.")
+        logger.error(f"CRITICAL: Qdrant search error: {e}", exc_info=True)
         return []
 
 @tool
