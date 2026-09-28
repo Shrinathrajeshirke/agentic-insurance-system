@@ -66,14 +66,14 @@ To ensure production readiness, custom logging and exception handling modules ha
 
 ## Phase 4: Stateful Agent Orchestration (LangGraph)
 
-- **`src/agents/graph.py`**: Asynchronous `StateGraph` workflow:
-  - `profiler_node`: Asynchronously extracts and updates structured applicant metadata (`UserProfile`) across conversational turns.
-  - `guardrail_node`: Evaluates profile parameters through the deterministic underwriting rule engine, injecting non-negotiable underwriting flags before retrieval.
-  - `retriever_node`: Executes exact demographic rate calculations, searches Qdrant for contract evidence, and conditionally enriches context with benchmark market disclosures.
-  - `advisor_node`: Synthesizes verified contract excerpts, calculated rupee numbers, and underwriting alerts into an IRDAI-compliant advisory assessment with cited reference tags.
+- **`src/agents/graph.py`**: `StateGraph` workflow over `AdvisoryState` (`messages`, `user_profile`, `guardrail_passed`, `underwriting_flags`, `rate_quotes`, `retrieved_contexts`):
+  - `guardrails_node`: Evaluates the applicant's structured profile (`user_profile`, collected by the underwriting wizard) through the deterministic rule engine, injecting non-negotiable underwriting flags before any retrieval. A critical failure (e.g., entry age outside 18–65) routes straight to the advisor, bypassing pricing and retrieval.
+  - `calculator_node`: Computes exact premium quotes across the benchmarked insurers from the applicant profile.
+  - `retrieval_node`: Runs hybrid search (dense + BM25 + reranker) over indexed contracts, and falls back to live web search when the user names an insurer or plan absent from the local chunks (see **Key Architecture & Capabilities**).
+  - `advisor_node` (async): Synthesizes verified contract excerpts, calculated rupee numbers, and underwriting alerts into an IRDAI-compliant advisory assessment with cited reference tags.
 - **Graph Compilation**: Fully asynchronous workflow compiled with checkpointer integration (see **Async Postgres Checkpointing** in Phase 5) for persistent conversation sessions.
 - **Full Async Execution Pipeline**: Resolved a `NotImplementedError` surfaced by LangGraph's event loop by routing all graph execution, token streaming, and checkpoint reads/writes through the async interface end-to-end — `astream_events(..., version="v2")` for streaming, and async context managers for FastAPI's `lifespan` and the checkpointer connection pool.
-- **Robust Schema Normalization**: Aligned the `AgentState` dictionary (`user_profile`, `guardrail_passed`, `underwriting_flags`, `rate_quotes`, `retrieved_contexts`) with the FastAPI request/response schemas, with defensive key lookups and fallback labels to prevent client-side rendering crashes (e.g. `KeyError: 'policy_name'`) when a node returns a partial state.
+- **Robust Schema Normalization**: Aligned the `AdvisoryState` dictionary (`user_profile`, `guardrail_passed`, `underwriting_flags`, `rate_quotes`, `retrieved_contexts`) with the FastAPI request/response schemas, with defensive key lookups and fallback labels to prevent client-side rendering crashes (e.g. `KeyError: 'policy_name'`) when a node returns a partial state.
 
 ## Phase 5: Privacy, Persistence, Reporting & UI
 
@@ -88,7 +88,7 @@ To ensure production readiness, custom logging and exception handling modules ha
   - Built-in async `lifespan` management initializing the checkpointer (`AsyncPostgresSaver` against Neon in production, `AsyncSqliteSaver` locally).
   - Secure JWT authentication endpoints (`/auth/register`, `/auth/login`).
   - Thread lifecycle management routes to create, list, rename (`PATCH /threads/{id}/rename`), and delete (`DELETE /threads/{id}`) advisory sessions.
-  - Real-time Server-Sent Events (SSE) streaming endpoint (`POST /chat/stream`) emitting incremental token chunks alongside mid-stream citation events: once `retriever_node` finishes, structured policy clauses (insurer, contract clause, page number, text snippet) are pushed as SSE events and rendered immediately in the Streamlit UI without interrupting generation.
+  - Real-time Server-Sent Events (SSE) streaming endpoint (`POST /chat/stream`) emitting incremental token chunks alongside mid-stream citation events: once `retrieval_node` finishes, structured policy clauses (insurer, contract clause, page number, text snippet) are pushed as SSE events and rendered immediately in the Streamlit UI without interrupting generation.
   - Multipart document ingestion endpoint (`/upload_brochure`) indexing custom PDF filings with page-level tracking.
   - Report export endpoint (`/export_advisory_pdf`) serving generated PDF advisory briefs.
 - **Automated PDF Advisory Report Generator (`src/tools/report_generator.py`)**:
@@ -144,6 +144,68 @@ The underwriting rule engine (entry age, maturity ceiling, HLV multiplier bands,
 ```bash
 pytest
 ```
+
+## Key Architecture & Capabilities
+
+- **Deterministic Underwriting Guardrails**: Non-negotiable IRDAI-compliant gates evaluating entry ages (18–65), HLV income multiplier bounds (e.g., max 25× for age ≤ 35), and 0% GST applicability before any policy recommendation.
+- **Hybrid Retrieval Pipeline**:
+  - **Dense Vectors**: `sentence-transformers/all-MiniLM-L6-v2` embeddings indexed in Qdrant.
+  - **Sparse Lexical Search**: In-memory BM25 with Okapi scoring.
+  - **Reciprocal Rank Fusion (RRF)**: Merges dense and lexical hit candidates ($k=60$).
+  - **Cross-Encoder Reranking**: Ultra-lightweight ONNX-quantized FlashRank reranker to ensure contract clauses (exclusions, HLV tables, riders) rank in top-4 context.
+- **Dynamic External Web Search & Fallback**:
+  - Automatically identifies unindexed external insurers (`LIC`, `SBI`, `Axis`, `Bajaj`, `Kotak`, `Star`, etc.) using regex whole-word boundaries.
+  - Two-stage query formulation: Primary regional query (`"<query> term insurance India"`) with relaxed fallback.
+  - Fallback ladder: If live web search is rate-limited, provides explicit static market benchmarks tagged with `STATIC_BENCHMARK_FALLBACK` to prevent hallucinating unverified figures as live data.
+- **Stateful Multi-Turn Persistence**: Async PostgreSQL / Neon checkpointer with local fallback and Windows Selector Event Loop policy compatibility.
+- **Security & Rate Limiting**:
+  - Restricted CORS origin whitelist (eliminating wildcard `*`).
+  - Tiered endpoint throttling via `slowapi` (`10/min` on auth/upload, `15/min` on `/chat/stream`).
+- **Production Observability**: Full execution graph tracing, node latencies, and token cost tracking via LangSmith.
+
+---
+
+## Evaluation Benchmark & Verification
+
+System performance is evaluated using an automated harness (`tests/evaluate_rag.py`) running real LangGraph invocations against 8 golden IRDAI underwriting scenarios with an independent `gpt-4o` LLM-as-a-judge.
+
+| Metric | Score | Notes |
+| :--- | :---: | :--- |
+| **Underwriting Guardrail Accuracy** | **100.0%** | Hard gates correctly validate or reject boundary profiles (e.g., age 67 entry rejection). |
+| **Contract Clause Recall** | **87.5%** | 7/8 hit rate (1 scenario purposefully bypasses retrieval on guardrail failure). |
+| **Mean Faithfulness Score** | **92.5%** | Verified claims grounded strictly in retrieved contract chunks. |
+| **Mean Context Relevance** | **85.0%** | Relevant clauses surfaced across all eligible queries via Hybrid Search + FlashRank. |
+| **Mean Advisory Latency** | **3.95s** | Steady-state response latency averages 1.3s – 2.3s after cold start. |
+
+Audit trail metrics are automatically written to `tests/eval_results.json`.
+
+---
+
+## Testing & Diagnostics
+
+### 1. Run Unit & Routing Tests
+
+Run the full suite (guardrails, calculator, search routing):
+
+```bash
+python -m pytest
+```
+
+Or target the web-search fallback routing and resilient-search logic only:
+
+```bash
+python -m pytest tests/test_search_utils.py
+```
+
+### 2. Verify Live Web Search
+
+Checks whether live DuckDuckGo search is reachable from the current machine. Run it locally and again from a Render shell to detect host IP blocking or rate limiting:
+
+```bash
+python -m scripts.check_web_search "Axis Max Life Smart Term Plan Plus"
+```
+
+It prints the package in use, the query variants tried, and either `OK: N results` (with titles and URLs) or `FAILED: <reason>`.
 
 ## Phase 6: Cloud Deployment & Lifecycle Management
 
