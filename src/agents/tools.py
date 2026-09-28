@@ -1,5 +1,8 @@
 import sys
+import os
+import json
 import uuid
+from typing import List, Dict, Any
 from langchain_core.tools import tool
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -7,6 +10,8 @@ from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct
 from duckduckgo_search import DDGS
+from rank_bm25 import BM25Okapi
+from flashrank import Ranker, RerankRequest
 
 from src.config import settings
 from src.logger import logger
@@ -14,6 +19,10 @@ from src.exception import CustomException
 
 # Managed remote embeddings via HF Serverless API (Zero local RAM footprint)
 _embeddings = None
+_ranker = None
+_bm25_index = None
+_bm25_corpus = []
+
 
 def get_embedding_client():
     global _embeddings
@@ -26,10 +35,44 @@ def get_embedding_client():
         )
     return _embeddings
 
+
 def get_qdrant_client() -> QdrantClient:
     if settings.QDRANT_URL and settings.QDRANT_API_KEY:
         return QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10.0)
     return QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=5.0)
+
+
+def get_flashranker() -> Ranker:
+    global _ranker
+    if _ranker is None:
+        logger.info("Initializing lightweight FlashRank cross-encoder reranker...")
+        _ranker = Ranker()
+    return _ranker
+
+
+def _init_bm25():
+    """Initializes in-memory BM25 index over policy corpus."""
+    global _bm25_index, _bm25_corpus
+    if _bm25_index is not None:
+        return
+
+    data_path = os.path.join(os.getcwd(), "data", "raw_policies", "sample_policies.json")
+    if not os.path.exists(data_path):
+        return
+
+    try:
+        with open(data_path, "r", encoding="utf-8") as f:
+            _bm25_corpus = json.load(f)
+
+        tokenized_corpus = [
+            f"{doc.get('section', '')} {doc.get('insurer', '')} {doc.get('content', '')}".lower().split()
+            for doc in _bm25_corpus
+        ]
+        _bm25_index = BM25Okapi(tokenized_corpus)
+        logger.info(f"Initialized BM25 index with {len(_bm25_corpus)} policy clauses.")
+    except Exception as e:
+        logger.warning(f"Failed to initialize BM25 index: {e}")
+
 
 def _detect_clause_type(text: str) -> str:
     lower = text.lower()
@@ -43,51 +86,122 @@ def _detect_clause_type(text: str) -> str:
         return "Riders & Add-on Benefits"
     if any(k in lower for k in ["surrender", "special exit", "paid up"]):
         return "Surrender & Exit Value"
+    if any(k in lower for k in ["hlv", "human life value", "multiplier", "income limit"]):
+        return "Underwriting & HLV"
+    if any(k in lower for k in ["gst", "tax", "80c"]):
+        return "Taxation & GST"
     if any(k in lower for k in ["claim", "settlement", "nominee"]):
         return "Claims & Payout Provisions"
     return "Terms & Conditions"
 
+
 @tool
 def search_policy_contracts(query: str, clause_type: str = None) -> list:
-    """Queries indexed policy clauses in Qdrant and returns verified citations."""
+    """Hybrid Search (Dense Vector + BM25 Lexical + Cross-Encoder Rerank) over policy contracts."""
     try:
-        logger.info(f"Querying Qdrant for: '{query}'")
+        logger.info(f"Querying Hybrid Search for: '{query}'")
+        _init_bm25()
+
         client = get_qdrant_client()
         embeddings = get_embedding_client()
 
-        # Remote API call to HuggingFace
+        # 1. Dense Retrieval via Qdrant
         query_vector = embeddings.embed_query(query)
-
         if hasattr(client, "query_points"):
             response = client.query_points(
                 collection_name=settings.QDRANT_COLLECTION_NAME,
                 query=query_vector,
-                limit=4
+                limit=8
             )
-            hits = response.points
+            dense_hits = response.points
         else:
-            hits = client.search(
+            dense_hits = client.search(
                 collection_name=settings.QDRANT_COLLECTION_NAME,
                 query_vector=query_vector,
-                limit=4
+                limit=8
             )
 
-        results = []
-        for hit in hits:
+        candidate_map: Dict[str, Dict[str, Any]] = {}
+        rrf_scores: Dict[str, float] = {}
+
+        # Accumulate Dense RRF scores (k=60)
+        for rank, hit in enumerate(dense_hits):
             payload = hit.payload or {}
-            results.append({
+            text = payload.get("text", "")
+            if not text:
+                continue
+            doc_id = str(hit.id)
+            candidate_map[doc_id] = {
                 "insurer": payload.get("insurer", "Unknown Insurer"),
-                "policy_name": payload.get("policy_name", "Policy Contract"),
+                "policy_name": payload.get("policy_name", payload.get("insurer", "Policy Contract")),
                 "page": payload.get("page", 1),
                 "section": payload.get("section", "General"),
                 "clause_type": payload.get("clause_type", "clause"),
-                "text": payload.get("text", ""),
-                "score": round(getattr(hit, "score", 1.0), 3)
+                "text": text,
+            }
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank + 1))
+
+        # 2. Sparse Lexical Retrieval via BM25
+        if _bm25_index and _bm25_corpus:
+            tokenized_query = query.lower().split()
+            bm25_scores = _bm25_index.get_scores(tokenized_query)
+            top_bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:8]
+
+            for rank, idx in enumerate(top_bm25_indices):
+                if bm25_scores[idx] <= 0:
+                    continue
+                doc = _bm25_corpus[idx]
+                doc_id = f"bm25_{idx}"
+                text = doc.get("content") or doc.get("text", "")
+                if doc_id not in candidate_map:
+                    candidate_map[doc_id] = {
+                        "insurer": doc.get("insurer", "Policy Insurer"),
+                        "policy_name": doc.get("insurer", "Policy Contract"),
+                        "page": doc.get("page", 1),
+                        "section": doc.get("section", _detect_clause_type(text)),
+                        "clause_type": doc.get("section", _detect_clause_type(text)),
+                        "text": text,
+                    }
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60 + rank + 1))
+
+        if not candidate_map:
+            return []
+
+        # Sort candidates by combined RRF score
+        sorted_candidate_ids = sorted(candidate_map.keys(), key=lambda did: rrf_scores.get(did, 0.0), reverse=True)[:10]
+        passages = [
+            {"id": cid, "text": candidate_map[cid]["text"]}
+            for cid in sorted_candidate_ids
+        ]
+
+        # 3. Cross-Encoder Re-ranking via FlashRank
+        try:
+            ranker = get_flashranker()
+            rerank_req = RerankRequest(query=query, passages=passages)
+            reranked_results = ranker.rerank(rerank_req)
+            top_reranked_ids = [r["id"] for r in reranked_results[:4]]
+        except Exception as r_err:
+            logger.warning(f"Reranker failed, falling back to RRF ordering: {r_err}")
+            top_reranked_ids = sorted_candidate_ids[:4]
+
+        final_results = []
+        for cid in top_reranked_ids:
+            item = candidate_map[cid]
+            final_results.append({
+                "insurer": item["insurer"],
+                "policy_name": item["policy_name"],
+                "page": item["page"],
+                "section": item["section"],
+                "clause_type": item["clause_type"],
+                "text": item["text"],
+                "score": round(rrf_scores.get(cid, 1.0), 3)
             })
-        return results
+
+        return final_results
     except Exception as e:
-        logger.error(f"CRITICAL: Qdrant search error: {e}", exc_info=True)
+        logger.error(f"CRITICAL: Hybrid search error: {e}", exc_info=True)
         return []
+
 
 @tool
 def web_search(query: str) -> str:
@@ -111,6 +225,7 @@ def web_search(query: str) -> str:
         "Return of Premium (TROP) Option: Typically increases base premium by ~2.2x to 2.3x."
     )
 
+
 def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> str:
     """Parses an uploaded PDF policy brochure, captures page numbers, and indexes into Qdrant."""
     try:
@@ -133,7 +248,6 @@ def ingest_policy_document(file_path: str, policy_name: str, insurer: str) -> st
         if not texts:
             return "No valid text chunks were found in the uploaded file."
 
-        # Remote API call to HuggingFace
         vectors = embeddings.embed_documents(texts)
 
         points = []

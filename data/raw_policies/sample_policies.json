@@ -1,5 +1,11 @@
 [
   {
+    "insurer": "HDFC Life Click 2 Protect Super",
+    "section": "Exclusions & Restrictions",
+    "page": 9,
+    "content": "Suicide Exclusion: In case of death due to suicide within 12 months from the date of commencement of risk or from the date of revival of policy, the nominee or beneficiary of the policyholder shall be entitled to receive at least 80% of the total premiums paid till the date of death or the surrender value available as on the date of death, whichever is higher, provided the policy is in force."
+  },
+  {
     "insurer": "Max Life Smart Secure Plus",
     "section": "Free-Look Period",
     "page": 4,
@@ -12,10 +18,22 @@
     "content": "A grace period of 30 days is allowed for payment of yearly, half-yearly, and quarterly premiums. For monthly premium payment mode, a grace period of 15 days is allowed. The policy remains in full force during the grace period. If premium remains unpaid at the expiry of the grace period, the policy lapses."
   },
   {
+    "insurer": "General Statutory Norms",
+    "section": "Underwriting & HLV",
+    "page": 2,
+    "content": "Human Life Value (HLV) & Financial Underwriting: Life insurance coverage is capped as a multiple of verified annual income based on applicant age. For applicants aged up to 35 years, maximum cover is restricted to 25x annual income. For ages 36-45, cover is limited to 20x annual income. For ages 46-55, cover is limited to 15x annual income. Any cover exceeding these limits mandates 3 years of audited ITR-V, Form 16, and financial justification."
+  },
+  {
     "insurer": "Max Life Smart Secure Plus",
     "section": "Surrender & Exit Value",
     "page": 11,
     "content": "Special Exit Value (Zero-Cost Exit): The policyholder can terminate the policy and receive a complete refund of all total premiums paid (excluding taxes and rider costs) provided the policy is active, the applicant has attained age 65 or completed 25 policy years, and the exit option is exercised within the designated window before policy termination."
+  },
+  {
+    "insurer": "Tata AIA Sampoorna Raksha Supreme",
+    "section": "Riders & Add-on Benefits",
+    "page": 14,
+    "content": "Riders and Supplementary Benefits: Critical illness cover and Accidental Death Benefit (ADB) riders are optional add-on protections and are not covered under pure term base rates. Adding comprehensive critical illness coverage or accidental death protection requires additional actuarial premium loading over the standard pure term base rate."
   },
   {
     "insurer": "General Statutory Norms",
