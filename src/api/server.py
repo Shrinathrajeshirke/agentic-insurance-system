@@ -1,4 +1,5 @@
-import os
+import os, sys
+import asyncio
 import uuid
 import json
 import shutil
@@ -19,9 +20,13 @@ from src.agents.tools import ingest_policy_document
 from src.schema.user_profile import UserProfile
 from src.security.sanitizer import sanitize_user_profile_for_storage
 from src.security.auth import hash_password, verify_password, create_access_token, get_current_user
-from src.db.models import get_db, User, ChatThread
+from src.db.models import get_db, User, ChatThread, init_db
 from src.logger import logger
 import uvicorn
+
+# Fix Windows ProactorEventLoop incompatibility with Psycopg async mode
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Global compiled agent instance
 agent_app = None
@@ -31,6 +36,11 @@ checkpointer_cm = None
 async def lifespan(app: FastAPI):
     global agent_app, checkpointer_cm
     try:
+        # 1. Initialize relational database tables (PostgreSQL/SQLite)
+        init_db()
+        logger.info("Relational database tables initialized successfully.")
+
+        # 2. Initialize LangGraph checkpointer
         checkpointer_cm = get_async_checkpointer()
         cp = await checkpointer_cm.__aenter__()
         # Compile graph with the async checkpointer

@@ -2,6 +2,11 @@ import os
 from contextlib import contextmanager, asynccontextmanager
 from src.config import settings
 from src.logger import logger
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 @asynccontextmanager
 async def get_async_checkpointer():

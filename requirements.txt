@@ -44,3 +44,4 @@ pytest-asyncio
 ## PostgreSQL
 langgraph-checkpoint-postgres
 psycopg[binary,pool]
+psycopg2-binary
