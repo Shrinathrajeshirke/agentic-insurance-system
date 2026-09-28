@@ -1,5 +1,5 @@
 import sys
-import os
+import os, re
 import json
 import uuid
 from typing import List, Dict, Any
@@ -9,13 +9,21 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS  # maintained package (duckduckgo_search was renamed to ddgs)
+except ImportError:  # pragma: no cover
+    from duckduckgo_search import DDGS
 from rank_bm25 import BM25Okapi
 from flashrank import Ranker, RerankRequest
 
 from src.config import settings
 from src.logger import logger
 from src.exception import CustomException
+from src.agents.search_utils import (
+    STATIC_FALLBACK_MARKER,
+    format_search_results,
+    run_live_search,
+)
 
 # Managed remote embeddings via HF Serverless API (Zero local RAM footprint)
 _embeddings = None
@@ -203,26 +211,34 @@ def search_policy_contracts(query: str, clause_type: str = None) -> list:
         return []
 
 
+_STATIC_BENCHMARKS = (
+    "Indian Market Term Insurance Benchmark Rates (IRDAI Insurers, 28-30M, Non-Smoker, 1 Cr Cover, 30-35 Yr Term):\n"
+    "1. HDFC Life Click 2 Protect Super: Base premium ~₹950 - ₹1,250/month (~₹11,000 - ₹14,500/year). Claim Settlement Ratio: 99.3%.\n"
+    "2. Max Life Smart Secure Plus: Base premium ~₹850 - ₹1,150/month (~₹10,000 - ₹13,500/year). Features Special Exit Value (zero-cost exit). Claim Settlement Ratio: 99.65%.\n"
+    "3. Tata AIA Sampoorna Raksha Supreme: Base premium ~₹900 - ₹1,200/month (~₹10,500 - ₹14,000/year). Up to 40 critical illness coverage options. Claim Settlement Ratio: 99.1%.\n"
+    "4. ICICI Prudential iProtect Smart: Base premium ~₹980 - ₹1,300/month (~₹11,500 - ₹15,000/year). Automatic waiver of premium on permanent disability. Claim Settlement Ratio: 98.9%.\n"
+    "Return of Premium (TROP) Option: Typically increases base premium by ~2.2x to 2.3x."
+)
+
+
 @tool
 def web_search(query: str) -> str:
-    """Fallback web search using DuckDuckGo with regional market pricing benchmarks."""
-    search_query = f"{query} term life insurance premium India IRDAI"
-    try:
-        logger.info(f"DuckDuckGo search for: '{search_query}'")
-        with DDGS() as ddgs:
-            results = list(ddgs.text(search_query, region="in-en", max_results=3))
-            if results:
-                return "\n---\n".join([f"Title: {r.get('title')}\nSnippet: {r.get('body')}" for r in results])
-    except Exception as e:
-        logger.warning(f"DuckDuckGo search failed: {e}")
+    """Live web search (DuckDuckGo, India region) for plans or insurers not in the local corpus.
 
+    If live search fails, returns static reference benchmarks prefixed with
+    STATIC_FALLBACK_MARKER so callers never mistake them for live results.
+    """
+    results, error = run_live_search(query, DDGS)
+    if results:
+        logger.info(f"Live web search returned {len(results)} results for: '{query}'")
+        return format_search_results(results)
+
+    logger.warning(f"Live web search failed for '{query}': {error}. Serving static benchmark reference.")
     return (
-        "Indian Market Term Insurance Benchmark Rates (IRDAI Insurers, 28-30M, Non-Smoker, 1 Cr Cover, 30-35 Yr Term):\n"
-        "1. HDFC Life Click 2 Protect Super: Base premium ~₹950 - ₹1,250/month (~₹11,000 - ₹14,500/year). Claim Settlement Ratio: 99.3%.\n"
-        "2. Max Life Smart Secure Plus: Base premium ~₹850 - ₹1,150/month (~₹10,000 - ₹13,500/year). Features Special Exit Value (zero-cost exit). Claim Settlement Ratio: 99.65%.\n"
-        "3. Tata AIA Sampoorna Raksha Supreme: Base premium ~₹900 - ₹1,200/month (~₹10,500 - ₹14,000/year). Up to 40 critical illness coverage options. Claim Settlement Ratio: 99.1%.\n"
-        "4. ICICI Prudential iProtect Smart: Base premium ~₹980 - ₹1,300/month (~₹11,500 - ₹15,000/year). Automatic waiver of premium on permanent disability. Claim Settlement Ratio: 98.9%.\n"
-        "Return of Premium (TROP) Option: Typically increases base premium by ~2.2x to 2.3x."
+        f"{STATIC_FALLBACK_MARKER}\n"
+        "NOTICE: Live web search was unavailable. The figures below are static, approximate market "
+        "benchmarks for four reference plans. They are NOT details of any other plan the user asked about.\n\n"
+        + _STATIC_BENCHMARKS
     )
 
 

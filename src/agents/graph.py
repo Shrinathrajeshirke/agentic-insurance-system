@@ -7,9 +7,11 @@ from langgraph.graph import StateGraph, END
 
 from src.schema.user_profile import UserProfile
 from src.schema.guardrails import evaluate_underwriting_guardrails
+from src.agents.tools import search_policy_contracts, web_search
 from src.tools.calculator import calculate_policy_rates
 from src.agents.tools import search_policy_contracts
 from src.agents.llm import get_llm
+from src.agents.search_utils import STATIC_FALLBACK_MARKER, needs_web_fallback
 from src.logger import logger
 from src.exception import CustomException
 
@@ -114,8 +116,9 @@ def calculator_node(state: AdvisoryState) -> Dict[str, Any]:
 
 def retrieval_node(state: AdvisoryState) -> Dict[str, Any]:
     """
-    Queries Qdrant vector index for precise policy clauses, exclusions,
-    and statutory conditions based on the user's latest message.
+    Queries Qdrant & BM25 hybrid index for verified contract clauses.
+    If no relevant internal clauses match, or if an explicit insurer/brand
+    in the query is missing from local corpus, falls back to live web search.
     """
     try:
         messages = state.get("messages", [])
@@ -123,13 +126,47 @@ def retrieval_node(state: AdvisoryState) -> Dict[str, Any]:
             return {"retrieved_contexts": []}
 
         latest_query = messages[-1].content
-        logger.info(f"Querying Qdrant for context: '{latest_query}'")
+        logger.info(f"Retrieving context for query: '{latest_query}'")
 
-        # Invoke search tool from tools.py
+        # 1. Primary: Query indexed contract database (Dense + BM25 + FlashRank)
         contexts = search_policy_contracts.invoke({"query": latest_query})
+
+        # 2. Fall back to live web search when local retrieval cannot answer:
+        #    a) nothing was retrieved, OR
+        #    b) the user named an insurer/plan that no retrieved chunk mentions.
+        if needs_web_fallback(latest_query, contexts):
+            logger.info(f"Local contract match weak or absent. Triggering live search fallback for: '{latest_query}'")
+            web_result_text = web_search.invoke({"query": latest_query})
+
+            if web_result_text:
+                is_static = web_result_text.startswith(STATIC_FALLBACK_MARKER)
+                if is_static:
+                    logger.warning("Live search unavailable; advisor will receive static benchmark notice only.")
+                    contexts = [{
+                        "insurer": "Static Benchmark Reference (live search unavailable)",
+                        "policy_name": "Static Benchmark",
+                        "page": 1,
+                        "section": "Static Reference Data",
+                        "clause_type": "Static Benchmark",
+                        "source_type": "web_static",
+                        "text": web_result_text.replace(STATIC_FALLBACK_MARKER, "", 1).strip(),
+                        "score": 0.0,
+                    }]
+                else:
+                    contexts = [{
+                        "insurer": "External Web Search (Live IRDAI / Market Data)",
+                        "policy_name": "Web Benchmark Search",
+                        "page": 1,
+                        "section": "Live Public Disclosure",
+                        "clause_type": "Market Benchmark",
+                        "source_type": "web_live",
+                        "text": web_result_text,
+                        "score": 1.0,
+                    }]
+
         return {"retrieved_contexts": contexts or []}
     except Exception as e:
-        logger.warning(f"Error querying Qdrant in retrieval_node: {e}. Continuing with empty context.")
+        logger.warning(f"Error querying context in retrieval_node: {e}. Continuing with empty context.")
         return {"retrieved_contexts": []}
 
 
@@ -160,15 +197,22 @@ async def advisor_node(state: AdvisoryState) -> Dict[str, Any]:
 
         context_blocks = []
         for c in contexts:
-            context_blocks.append(f"[{c.get('insurer', 'Policy')} | Section: {c.get('section', 'General')} | Page {c.get('page', 1)}]: {c.get('text', '')}")
+            if c.get("source_type") in ("web_live", "web_static"):
+                header = f"[{c.get('insurer', 'Web')} | {c.get('section', 'Web')}]"
+            else:
+                header = f"[{c.get('insurer', 'Policy')} | Section: {c.get('section', 'General')} | Page {c.get('page', 1)}]"
+            context_blocks.append(f"{header}: {c.get('text', '')}")
         contexts_text = "\n\n".join(context_blocks) if context_blocks else "No direct contract excerpts retrieved."
 
         system_prompt = f"""You are an elite Indian Life Insurance Advisory Agent specializing in IRDAI term insurance underwriting.
 
 ### MANDATORY ADVISORY RULES:
 1. Underwriting Accuracy: Always disclose any Underwriting Warnings or Critical Violations upfront.
-2. Zero Hallucination: Ground policy terms, exclusions, free-look periods, and grace periods strictly in the provided Context Excerpts. Cite the insurer and section.
-3. Pricing Transparency: Reference the calculated rate table when quoting premiums. Note that individual life insurance incurs 0% GST.
+2. Grounded Knowledge: Ground policy terms, exclusions, free-look periods, and grace periods strictly in the provided Context Excerpts. Cite the insurer, section, or source.
+3. Live Web Findings: If the excerpts originate from 'External Web Search', synthesize the information to directly answer the user's inquiry regarding external insurers or plans, and mention the source names.
+4. Pricing Transparency: Reference the calculated rate table when quoting premiums. Note that individual life insurance incurs 0% GST.
+5. Named Plans: If the user asks about a specific plan or insurer that does not appear in the excerpts, never present a different plan's details as the answer to their question.
+6. Static Data: If the excerpts are labelled 'Static Benchmark Reference', live search failed. Tell the user plainly that live details for the requested plan could not be retrieved right now. You may share the static figures only as clearly-labelled approximate market context for the other reference plans, and must never describe them as live findings.
 
 ---
 ### ACTIVE UNDERWRITING STATUS:
@@ -179,7 +223,7 @@ async def advisor_node(state: AdvisoryState) -> Dict[str, Any]:
 {quotes_summary}
 
 ---
-### VERIFIED POLICY CONTRACT EXCERPTS:
+### VERIFIED POLICY CONTRACT EXCERPTS & LIVE FINDINGS:
 {contexts_text}
 ---
 """

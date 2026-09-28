@@ -17,7 +17,8 @@ aiosqlite
 # --- Vector Database & Document Parsing ---
 qdrant-client
 pypdf
-duckduckgo_search
+#duckduckgo_search
+ddgs
 
 # --- API & Web Interface ---
 fastapi
