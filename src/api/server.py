@@ -1,17 +1,30 @@
-import os, sys
+import sys
 import asyncio
+import os
 import uuid
 import json
 import shutil
 import tempfile
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status
-from pydantic import BaseModel, EmailStr
 from typing import List, Dict, Any, Optional
+
+# Windows ProactorEventLoop compatibility safeguard for psycopg async mode
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status, Request
+from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from langchain_core.messages import HumanMessage, AIMessage
-from fastapi.responses import Response
+
+# Rate limiting dependencies
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from src.tools.report_generator import generate_pdf_advisory_report
 from src.agents.graph import get_graph
@@ -24,26 +37,22 @@ from src.db.models import get_db, User, ChatThread, init_db
 from src.logger import logger
 import uvicorn
 
-# Fix Windows ProactorEventLoop incompatibility with Psycopg async mode
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 # Global compiled agent instance
 agent_app = None
 checkpointer_cm = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global agent_app, checkpointer_cm
     try:
-        # 1. Initialize relational database tables (PostgreSQL/SQLite)
+        # 1. Ensure relational tables (User, ChatThread) exist in PostgreSQL / SQLite
         init_db()
         logger.info("Relational database tables initialized successfully.")
 
         # 2. Initialize LangGraph checkpointer
         checkpointer_cm = get_async_checkpointer()
         cp = await checkpointer_cm.__aenter__()
-        # Compile graph with the async checkpointer
         agent_app = get_graph(checkpointer=cp)
         logger.info("LangGraph compiled successfully with durable async checkpointer.")
         yield
@@ -51,7 +60,38 @@ async def lifespan(app: FastAPI):
         if checkpointer_cm:
             await checkpointer_cm.__aexit__(None, None, None)
 
+
 app = FastAPI(title="Term Life Insurance Advisor API", lifespan=lifespan)
+
+# --- Rate Limiter Setup ---
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# --- Strict CORS Configuration ---
+# Restrict wildcard '*' to authorized client application origins
+ALLOWED_ORIGINS = [
+    "http://localhost:8501",        # Streamlit default local port
+    "http://127.0.0.1:8501",
+    "http://localhost:3000",        # Web frontend dev server
+    "http://127.0.0.1:3000",
+    "https://your-streamlit-app.streamlit.app",  # Production Streamlit Cloud
+]
+
+# Allow overriding or appending origins from environment variable
+env_origins = os.getenv("ALLOWED_ORIGINS")
+if env_origins:
+    ALLOWED_ORIGINS.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 
 # --- Schemas ---
 class UserAuth(BaseModel):
@@ -83,9 +123,11 @@ class ChatResponse(BaseModel):
     underwriting_flags: List[str] = []
     quotes: List[Dict[str, Any]] = []
 
+
 # --- Auth Endpoints ---
 @app.post("/auth/register", response_model=TokenResponse)
-def register(auth_data: UserAuth, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register(request: Request, auth_data: UserAuth, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == auth_data.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered.")
@@ -101,14 +143,17 @@ def register(auth_data: UserAuth, db: Session = Depends(get_db)):
     token = create_access_token(data={"sub": new_user.id, "email": new_user.email})
     return TokenResponse(access_token=token, email=new_user.email)
 
+
 @app.post("/auth/login", response_model=TokenResponse)
-def login(auth_data: UserAuth, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, auth_data: UserAuth, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == auth_data.email).first()
     if not user or not verify_password(auth_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     
     token = create_access_token(data={"sub": user.id, "email": user.email})
     return TokenResponse(access_token=token, email=user.email)
+
 
 # --- Thread Endpoints ---
 @app.get("/threads", response_model=List[ThreadItem])
@@ -121,6 +166,7 @@ def get_user_threads(current_user: User = Depends(get_current_user), db: Session
             created_at=t.created_at.strftime("%b %d, %H:%M")
         ) for t in threads
     ]
+
 
 @app.post("/threads/new", response_model=ThreadItem)
 def create_thread(
@@ -138,8 +184,10 @@ def create_thread(
         created_at=new_thread.created_at.strftime("%b %d, %H:%M")
     )
 
+
 class ThreadRenameRequest(BaseModel):
     title: str
+
 
 @app.patch("/threads/{thread_id}/rename", response_model=ThreadItem)
 def rename_thread(
@@ -170,6 +218,7 @@ def rename_thread(
         created_at=thread.created_at.strftime("%b %d, %H:%M")
     )
 
+
 @app.delete("/threads/{thread_id}")
 def delete_thread(
     thread_id: str,
@@ -189,10 +238,13 @@ def delete_thread(
 
     return {"status": "success", "message": "Session deleted."}
 
+
 # --- Streaming Chat Endpoint ---
 @app.post("/chat/stream")
+@limiter.limit("15/minute")
 async def chat_stream_endpoint(
-    request: ChatRequest,
+    request: Request,
+    chat_payload: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -200,29 +252,29 @@ async def chat_stream_endpoint(
         raise HTTPException(status_code=503, detail="Agent workflow is not initialized.")
 
     thread = db.query(ChatThread).filter(
-        ChatThread.id == request.thread_id,
+        ChatThread.id == chat_payload.thread_id,
         ChatThread.user_id == current_user.id
     ).first()
 
     if not thread:
-        thread = ChatThread(id=request.thread_id, user_id=current_user.id, title="Advisory Session")
+        thread = ChatThread(id=chat_payload.thread_id, user_id=current_user.id, title="Advisory Session")
         db.add(thread)
         db.commit()
 
-    if thread.title == "New Advisory Session" and len(request.messages) > 0:
-        first_user_msg = next((m.content for m in request.messages if m.role == "user"), None)
+    if thread.title == "New Advisory Session" and len(chat_payload.messages) > 0:
+        first_user_msg = next((m.content for m in chat_payload.messages if m.role == "user"), None)
         if first_user_msg and "initial profile assessment" not in first_user_msg.lower():
             thread.title = first_user_msg[:30] + ("..." if len(first_user_msg) > 30 else "")
             db.commit()
 
     langchain_messages = []
-    for msg in request.messages:
+    for msg in chat_payload.messages:
         if msg.role == "user":
             langchain_messages.append(HumanMessage(content=msg.content))
         elif msg.role == "assistant":
             langchain_messages.append(AIMessage(content=msg.content))
 
-    profile_dict = request.user_profile or {}
+    profile_dict = chat_payload.user_profile or {}
     initial_state = {
         "messages": langchain_messages,
         "user_profile": profile_dict,
@@ -233,7 +285,7 @@ async def chat_stream_endpoint(
         "next_step": None
     }
 
-    config = {"configurable": {"thread_id": request.thread_id}}
+    config = {"configurable": {"thread_id": chat_payload.thread_id}}
 
     async def event_generator():
         try:
@@ -275,10 +327,13 @@ async def chat_stream_endpoint(
 
     return EventSourceResponse(event_generator())
 
+
 # --- Synchronous Chat Endpoint ---
 @app.post("/chat", response_model=ChatResponse)
+@limiter.limit("20/minute")
 async def chat_endpoint(
-    request: ChatRequest, 
+    request: Request,
+    chat_payload: ChatRequest, 
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -287,23 +342,23 @@ async def chat_endpoint(
 
     try:
         thread = db.query(ChatThread).filter(
-            ChatThread.id == request.thread_id, 
+            ChatThread.id == chat_payload.thread_id, 
             ChatThread.user_id == current_user.id
         ).first()
 
         if not thread:
-            thread = ChatThread(id=request.thread_id, user_id=current_user.id, title="Advisory Session")
+            thread = ChatThread(id=chat_payload.thread_id, user_id=current_user.id, title="Advisory Session")
             db.add(thread)
             db.commit()
 
         langchain_messages = []
-        for msg in request.messages:
+        for msg in chat_payload.messages:
             if msg.role == "user":
                 langchain_messages.append(HumanMessage(content=msg.content))
             elif msg.role == "assistant":
                 langchain_messages.append(AIMessage(content=msg.content))
 
-        profile_dict = request.user_profile or {}
+        profile_dict = chat_payload.user_profile or {}
         initial_state = {
             "messages": langchain_messages,
             "user_profile": profile_dict,
@@ -314,7 +369,7 @@ async def chat_endpoint(
             "next_step": None
         }
 
-        config = {"configurable": {"thread_id": request.thread_id}}
+        config = {"configurable": {"thread_id": chat_payload.thread_id}}
         final_state = await agent_app.ainvoke(initial_state, config=config)
 
         ai_reply = final_state["messages"][-1].content
@@ -329,9 +384,12 @@ async def chat_endpoint(
         logger.error(f"Chat API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # --- Document Ingestion Endpoint ---
 @app.post("/upload_brochure")
+@limiter.limit("5/minute")
 async def upload_brochure_endpoint(
+    request: Request,
     file: UploadFile = File(...),
     policy_name: str = Form(...),
     insurer: str = Form(...)
@@ -358,12 +416,16 @@ async def upload_brochure_endpoint(
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+
 class PDFExportRequest(BaseModel):
     user_profile: Dict[str, Any]
     advisory_text: str
 
+
 @app.post("/export_advisory_pdf")
+@limiter.limit("10/minute")
 def export_advisory_pdf_endpoint(
+    request: Request,
     req: PDFExportRequest,
     current_user: User = Depends(get_current_user)
 ):
@@ -381,6 +443,7 @@ def export_advisory_pdf_endpoint(
     except Exception as e:
         logger.error(f"PDF generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

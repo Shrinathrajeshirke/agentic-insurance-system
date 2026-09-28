@@ -45,3 +45,7 @@ pytest-asyncio
 langgraph-checkpoint-postgres
 psycopg[binary,pool]
 psycopg2-binary
+
+## ranker
+flashrank
+rank-bm25
